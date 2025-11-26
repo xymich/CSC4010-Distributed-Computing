@@ -7,6 +7,7 @@ public class SimpleChatClient {
     private static ChatNode node;
     private static Scanner scanner;
     private static boolean running = true;
+    private static String advertisedIp;
     
     public static void main(String[] args) {
         scanner = new Scanner(System.in);
@@ -15,6 +16,7 @@ public class SimpleChatClient {
         
         // Get user input with validation
         String nickname = getNickname();
+        advertisedIp = chooseAdvertisedIp();
         
         // Retry loop for port selection
         while (true) {
@@ -22,7 +24,7 @@ public class SimpleChatClient {
             
             // Create node with error handling
             try {
-                node = new ChatNode(nickname, "127.0.0.1", port);
+                node = new ChatNode(nickname, advertisedIp, port);
                 node.start();
                 break; // Success! Exit the retry loop
             } catch (Exception e) {
@@ -48,7 +50,7 @@ public class SimpleChatClient {
             connectToNetwork();
         } else {
             node.ensureSeedKey();
-            System.out.println("\nStarted as seed node. Others can join at: 127.0.0.1:" + node.getPort());
+            System.out.println("\nStarted as seed node. Others can join at: " + advertisedIp + ":" + node.getPort());
         }
         
         showCommands();
@@ -80,6 +82,23 @@ public class SimpleChatClient {
             }
             
             return nickname;
+        }
+    }
+    
+    private static String chooseAdvertisedIp() {
+        String detected = NetworkUtils.detectBestAddress();
+        System.out.println("Detected local IP for advertising: " + detected);
+        System.out.println("Set CHAT_ADVERTISE_IP env variable or enter a value to override.");
+        while (true) {
+            System.out.print("Advertise which IP [" + detected + "]: ");
+            String input = scanner.nextLine().trim();
+            if (input.isEmpty()) {
+                return detected;
+            }
+            if (isValidIP(input)) {
+                return input;
+            }
+            System.out.println("Invalid IP. Please enter a valid IPv4 address.");
         }
     }
     
