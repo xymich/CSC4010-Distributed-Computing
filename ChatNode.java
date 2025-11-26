@@ -10,6 +10,10 @@ public class ChatNode {
     private String ipAddress;
     private int port;
     
+    // Room identity
+    private UUID roomId;
+    private String roomName;
+    
     // Swarm management
     private int swarmId;
     private boolean isSwarmKey;
@@ -28,13 +32,25 @@ public class ChatNode {
     // Network components
     private UDPHandler udpHandler;
     private FragmentAssembler fragmentAssembler;
+    private DiscoveryHandler discoveryHandler;
+    private SwarmManager swarmManager;
     private boolean running;
     
+    // Join time tracking
+    private long joinTime;
+    
     public ChatNode(String nickname, String ipAddress, int port) {
+        this(nickname, ipAddress, port, "General Chat");
+    }
+    
+    public ChatNode(String nickname, String ipAddress, int port, String roomName) {
         this.nodeId = UUID.randomUUID();
         this.nickname = nickname;
         this.ipAddress = ipAddress;
         this.port = port;
+        
+        this.roomId = UUID.randomUUID();
+        this.roomName = roomName;
         
         this.swarmId = 0;  // Default swarm
         this.isSwarmKey = false;
@@ -49,12 +65,23 @@ public class ChatNode {
         this.fragmentAssembler = new FragmentAssembler();
         this.running = false;
         
-        try {
-            this.udpHandler = new UDPHandler(port, this::handleIncomingPacket);
-        } catch (Exception e) {
-            System.err.println("Failed to create UDP handler: " + e.getMessage());
-            e.printStackTrace();
-        }
+        // Initialize join time and swarm manager
+        this.joinTime = System.currentTimeMillis();
+        this.swarmManager = new SwarmManager(this);
+        
+        // Don't create UDP handler in constructor - do it in start() instead
+        // This prevents port binding issues when constructor fails
+        this.udpHandler = null;
+        
+        this.discoveryHandler = new DiscoveryHandler(
+            roomId, 
+            roomName, 
+            ipAddress, 
+            port, 
+            () -> knownPeers.size() + 1 // +1 for self
+        );
+        discoveryHandler.setBroadcastEnabled(false); // enable once we become an active room
+        knownPeers.put(nodeId, createOwnPeerInfo());
     }
     
     // Lamport clock operations
@@ -77,25 +104,55 @@ public class ChatNode {
     public String getNickname() { return nickname; }
     public String getIpAddress() { return ipAddress; }
     public int getPort() { return port; }
+    public UUID getRoomId() { return roomId; }
+    public String getRoomName() { return roomName; }
     public int getSwarmId() { return swarmId; }
     public boolean isSwarmKey() { return isSwarmKey; }
     
     // Setters
-    public void setSwarmId(int swarmId) { this.swarmId = swarmId; }
-    public void setSwarmKey(boolean isSwarmKey) { this.isSwarmKey = isSwarmKey; }
+    public void setSwarmId(int swarmId) { 
+        this.swarmId = swarmId; 
+        syncSelfPeerInfo();
+    }
+    public void setSwarmKey(boolean isSwarmKey) { 
+        this.isSwarmKey = isSwarmKey; 
+        syncSelfPeerInfo();
+        setDiscoveryBroadcastEnabled(isSwarmKey);
+        if (isSwarmKey) {
+            triggerDiscoveryBroadcast();
+        }
+    }
+    public void setRoomName(String roomName) { 
+        this.roomName = roomName;
+        if (discoveryHandler != null) {
+            discoveryHandler.setRoomName(roomName);
+        }
+    }
     
-    // Peer management methods (stubs for now)
+    // Peer management methods
     public void addPeer(PeerInfo peer) {
+        if (peer.getNodeId().equals(nodeId)) {
+            syncSelfPeerInfo();
+            return;
+        }
         knownPeers.put(peer.getNodeId(), peer);
         if (peer.getSwarmId() == this.swarmId) {
             swarmPeers.add(peer.getNodeId());
+            swarmManager.addSwarmMember(peer);
         }
+        
         if (peer.isSwarmKey() && peer.getSwarmId() != this.swarmId) {
             keyNodePeers.add(peer.getNodeId());
+            swarmManager.addKeyNode(peer);
         }
     }
     
     public void removePeer(UUID peerId) {
+        PeerInfo peer = knownPeers.get(peerId);
+        if (peer != null && peer.getSwarmId() == this.swarmId) {
+            swarmManager.removeSwarmMember(peerId);
+        }
+        
         knownPeers.remove(peerId);
         swarmPeers.remove(peerId);
         keyNodePeers.remove(peerId);
@@ -146,6 +203,25 @@ public class ChatNode {
         return "Node: " + nickname + " (" + nodeId.toString().substring(0, 8) + "...) "
                + "@ " + ipAddress + ":" + port + " [Swarm " + swarmId + "]" + keyStatus;
     }
+
+    private void refreshJoinMetadata() {
+        this.joinTime = System.currentTimeMillis();
+        if (swarmManager != null) {
+            swarmManager.resetJoinTime(this.joinTime);
+        }
+        syncSelfPeerInfo();
+    }
+    
+    private void syncSelfPeerInfo() {
+        PeerInfo self = knownPeers.get(nodeId);
+        if (self == null) {
+            knownPeers.put(nodeId, createOwnPeerInfo());
+            return;
+        }
+        self.setSwarmKey(isSwarmKey);
+        self.setSwarmId(swarmId);
+        self.setJoinTime(joinTime);
+    }
     
     // ===== NETWORK OPERATIONS =====
     
@@ -156,6 +232,7 @@ public class ChatNode {
         if (running) {
             return;
         }
+        refreshJoinMetadata();
         
         // Create new UDP handler if needed (for reconnection)
         if (udpHandler == null || !udpHandler.isRunning()) {
@@ -169,7 +246,25 @@ public class ChatNode {
         
         running = true;
         udpHandler.start();
+        
+        // Start discovery
+        if (discoveryHandler != null) {
+            discoveryHandler.start();
+        }
+        
         System.out.println("Node started: " + this);
+        
+        // After joining, request key nodes if not first member
+        if (!getAllPeers().isEmpty()) {
+            new Thread(() -> {
+                try {
+                    Thread.sleep(2000); // Wait for join to complete
+                    swarmManager.requestKeyNodes();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+        }
     }
     
     /**
@@ -185,7 +280,23 @@ public class ChatNode {
         
         running = false;
         udpHandler.stop();
+        
+        // Stop discovery
+        if (discoveryHandler != null) {
+            discoveryHandler.stop();
+        }
+        
         System.out.println("Node stopped: " + nickname);
+    }
+    
+    /**
+     * Get list of discovered rooms
+     */
+    public Collection<RoomInfo> getDiscoveredRooms() {
+        if (discoveryHandler != null) {
+            return discoveryHandler.getDiscoveredRooms();
+        }
+        return Collections.emptyList();
     }
     
     /**
@@ -261,6 +372,9 @@ public class ChatNode {
                 case PEER_LIST -> handlePeerList(completePacket);
                 case HEARTBEAT -> handleHeartbeat(completePacket);
                 case LEAVE_NOTIFY -> handleLeaveNotify(completePacket);
+                case KEY_NODE_ANNOUNCE -> handleKeyNodeAnnounce(completePacket);
+                case KEY_NODE_LIST -> handleKeyNodeList(completePacket);
+                case KEY_NODE_REQUEST -> handleKeyNodeRequest(completePacket);
                 default -> System.out.println("Unknown packet type: " + completePacket.getType());
             }
             
@@ -325,6 +439,11 @@ public class ChatNode {
         
         // Notify other peers about the new peer
         broadcastPeerDiscovery(newPeer);
+        
+        // If we're key node, share key node list with new member
+        if (isSwarmKey) {
+            swarmManager.shareKeyNodes();
+        }
     }
     
     private void handlePeerDiscovery(NetworkPacket packet) {
@@ -367,11 +486,46 @@ public class ChatNode {
     private PeerInfo createOwnPeerInfo() {
         PeerInfo own = new PeerInfo(nodeId, nickname, ipAddress, port, swarmId);
         own.setSwarmKey(isSwarmKey);
+        own.setJoinTime(joinTime);
         return own;
     }
     
-    private void broadcastToSwarm(NetworkPacket packet) {
+    public void broadcastToSwarm(NetworkPacket packet) {
         udpHandler.broadcast(packet, getSwarmPeers());
+    }
+    
+    public void updateSwarmKeyFlags(UUID keyNodeId) {
+        for (PeerInfo peer : knownPeers.values()) {
+            if (peer.getSwarmId() == this.swarmId) {
+                peer.setSwarmKey(peer.getNodeId().equals(keyNodeId));
+            }
+        }
+        syncSelfPeerInfo();
+    }
+
+    public void ensureSeedKey() {
+        swarmManager.ensureKeyNode();
+    }
+
+    public void prepareForJoin() {
+        setSwarmKey(false);
+        setDiscoveryBroadcastEnabled(false);
+    }
+
+    public void setDiscoveryBroadcastEnabled(boolean enabled) {
+        if (discoveryHandler != null) {
+            discoveryHandler.setBroadcastEnabled(enabled);
+        }
+    }
+
+    public void triggerDiscoveryBroadcast() {
+        if (discoveryHandler != null) {
+            discoveryHandler.triggerImmediateBroadcast();
+        }
+    }
+    
+    public void sendTo(NetworkPacket packet, String address, int port) throws Exception {
+        udpHandler.sendWithFragmentation(packet, address, port);
     }
     
     private void broadcastToKeyNodes(NetworkPacket packet) {
@@ -468,5 +622,46 @@ public class ChatNode {
     
     public boolean isRunning() {
         return running;
+    }
+    
+    // ===== KEY NODE HANDLERS =====
+    
+    private void handleKeyNodeAnnounce(NetworkPacket packet) {
+        PeerInfo keyNode = (PeerInfo) packet.getPayload();
+        System.out.println("Key node announced: " + keyNode.getNickname());
+        
+        if (keyNode.getNodeId().equals(nodeId)) {
+            if (!isSwarmKey) {
+                setSwarmKey(true);
+            }
+            updateSwarmKeyFlags(nodeId);
+            return;
+        }
+
+        addPeer(keyNode);
+        
+        if (keyNode.getSwarmId() == this.swarmId) {
+            updateSwarmKeyFlags(keyNode.getNodeId());
+        }
+    }
+    
+    private void handleKeyNodeList(NetworkPacket packet) {
+        @SuppressWarnings("unchecked")
+        java.util.List<PeerInfo> keyNodes = (java.util.List<PeerInfo>) packet.getPayload();
+        System.out.println("Received " + keyNodes.size() + " key nodes from other swarms");
+        
+        for (PeerInfo keyNode : keyNodes) {
+            swarmManager.addKeyNode(keyNode);
+        }
+    }
+    
+    private void handleKeyNodeRequest(NetworkPacket packet) {
+        // Only key nodes respond to this
+        if (!isSwarmKey) {
+            return;
+        }
+        
+        System.out.println(packet.getSenderNickname() + " requested key node list");
+        swarmManager.shareKeyNodes();
     }
 }

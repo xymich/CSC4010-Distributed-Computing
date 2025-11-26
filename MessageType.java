@@ -9,5 +9,8 @@ public enum MessageType implements Serializable {
     JOIN_REQUEST,       // New node joining
     LEAVE_NOTIFY,       // Graceful disconnect
     FRAGMENT,           // Fragment of larger message
-    FRAGMENT_ACK        // Acknowledgment of fragment
+    FRAGMENT_ACK,       // Acknowledgment of fragment
+    KEY_NODE_ANNOUNCE,  // Key node announcing itself
+    KEY_NODE_LIST,      // List of key nodes from other swarms
+    KEY_NODE_REQUEST    // Request for key node list
 }

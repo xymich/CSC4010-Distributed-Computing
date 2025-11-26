@@ -10,6 +10,7 @@ public class PeerInfo implements Serializable {
     private long lastSeen;
     private int swarmId;
     private boolean isSwarmKey;
+    private long joinTime;  // NEW: Track when peer joined
     
     public PeerInfo(UUID nodeId, String nickname, String ipAddress, int port, int swarmId) {
         this.nodeId = nodeId;
@@ -19,6 +20,7 @@ public class PeerInfo implements Serializable {
         this.swarmId = swarmId;
         this.lastSeen = System.currentTimeMillis();
         this.isSwarmKey = false;
+        this.joinTime = System.currentTimeMillis();
     }
     
     // Getters
@@ -29,11 +31,13 @@ public class PeerInfo implements Serializable {
     public long getLastSeen() { return lastSeen; }
     public int getSwarmId() { return swarmId; }
     public boolean isSwarmKey() { return isSwarmKey; }
+    public long getJoinTime() { return joinTime; }
     
     // Setters
     public void setLastSeen(long lastSeen) { this.lastSeen = lastSeen; }
     public void setSwarmId(int swarmId) { this.swarmId = swarmId; }
     public void setSwarmKey(boolean isSwarmKey) { this.isSwarmKey = isSwarmKey; }
+    public void setJoinTime(long joinTime) { this.joinTime = joinTime; }
     
     public void updateLastSeen() {
         this.lastSeen = System.currentTimeMillis();

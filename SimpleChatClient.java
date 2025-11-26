@@ -1,4 +1,5 @@
 import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.Scanner;
 
 public class SimpleChatClient {
@@ -14,19 +15,25 @@ public class SimpleChatClient {
         
         // Get user input with validation
         String nickname = getNickname();
-        int port = getPort();
         
-        // Create node with error handling
-        try {
-            node = new ChatNode(nickname, "127.0.0.1", port);
-            node.start();
-        } catch (Exception e) {
-            System.err.println("Failed to start node: " + e.getMessage());
-            if (e.getMessage() != null && e.getMessage().contains("Address already in use")) {
-                System.err.println("Port " + port + " is already in use. Please choose a different port.");
+        // Retry loop for port selection
+        while (true) {
+            int port = getPort();
+            
+            // Create node with error handling
+            try {
+                node = new ChatNode(nickname, "127.0.0.1", port);
+                node.start();
+                break; // Success! Exit the retry loop
+            } catch (Exception e) {
+                System.err.println("Failed to start node: " + e.getMessage());
+                if (e.getMessage() != null && e.getMessage().contains("Address already in use")) {
+                    System.err.println("Port " + port + " is already in use. Please try a different port.\n");
+                } else {
+                    System.err.println("Unexpected error. Please try again.\n");
+                }
+                // Loop continues, asking for a new port
             }
-            scanner.close();
-            return;
         }
         
         System.out.println("\nYour node info:");
@@ -37,9 +44,11 @@ public class SimpleChatClient {
         String joinChoice = scanner.nextLine().trim();
         
         if (isYes(joinChoice)) {
+            node.prepareForJoin();
             connectToNetwork();
         } else {
-            System.out.println("\nStarted as seed node. Others can join at: 127.0.0.1:" + port);
+            node.ensureSeedKey();
+            System.out.println("\nStarted as seed node. Others can join at: 127.0.0.1:" + node.getPort());
         }
         
         showCommands();
@@ -101,45 +110,96 @@ public class SimpleChatClient {
     }
     
     private static void connectToNetwork() {
+        try {
+            Thread.sleep(500); // Give discovery a moment to populate
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        node.prepareForJoin();
+        
         while (true) {
+            var rooms = new ArrayList<>(node.getDiscoveredRooms());
             System.out.println("\nConnecting to network...");
-            System.out.print("Enter peer IP address (or 'n' to cancel): ");
-            String peerIp = scanner.nextLine().trim();
+            if (rooms.isEmpty()) {
+                System.out.println("No discovered rooms yet. Enter an IP address manually or wait for broadcasts.");
+            } else {
+                System.out.println("Discovered rooms:");
+                for (int i = 0; i < rooms.size(); i++) {
+                    System.out.println("  " + (i + 1) + ". " + rooms.get(i));
+                }
+            }
+            System.out.print("Enter room number, IP address, or 'n' to cancel: ");
+            String selection = scanner.nextLine().trim();
             
-            // Check for cancel
-            if (peerIp.equalsIgnoreCase("n")) {
+            if (selection.equalsIgnoreCase("n")) {
+                node.ensureSeedKey();
                 System.out.println("Connection cancelled. Started as seed node.");
                 return;
             }
             
-            // Check for command
-            if (peerIp.startsWith("/")) {
-                handleCommand(peerIp);
+            if (selection.startsWith("/")) {
+                handleCommand(selection);
                 continue;
             }
             
-            // Validate IP address
-            if (!isValidIP(peerIp)) {
-                System.out.println("Invalid IP address! Please enter a valid IPv4 address (e.g., 127.0.0.1)");
-                System.out.print("Try again? [Y]/n: ");
-                String retry = scanner.nextLine().trim();
-                if (!isYes(retry)) {
-                    System.out.println("Started as seed node.");
+            String peerIp;
+            int peerPort;
+            
+            if (selection.contains(".")) {
+                // Treat input as IP address
+                if (!isValidIP(selection)) {
+                    System.out.println("Invalid IP address! Please enter a valid IPv4 address (e.g., 127.0.0.1)");
+                    continue;
+                }
+                Integer manualPort = promptForPeerPort();
+                if (manualPort == null) {
+                    node.ensureSeedKey();
+                    System.out.println("Connection cancelled. Started as seed node.");
                     return;
                 }
-                continue;
+                peerIp = selection;
+                peerPort = manualPort;
+            } else {
+                if (rooms.isEmpty()) {
+                    System.out.println("No rooms available. Enter an IP address instead.");
+                    continue;
+                }
+                try {
+                    int roomNumber = Integer.parseInt(selection);
+                    if (roomNumber < 1 || roomNumber > rooms.size()) {
+                        System.out.println("Invalid room number. Use /rooms to refresh the list.");
+                        continue;
+                    }
+                    RoomInfo room = rooms.get(roomNumber - 1);
+                    peerIp = room.getSeedNodeAddress();
+                    peerPort = room.getSeedNodePort();
+                    System.out.println("Attempting to join room \"" + room.getRoomName() + "\" @ " + peerIp + ":" + peerPort + "...");
+                } catch (NumberFormatException e) {
+                    System.out.println("Invalid selection. Enter a room number or an IP address.");
+                    continue;
+                }
             }
             
+            try {
+                node.joinNetwork(peerIp, peerPort);
+                Thread.sleep(1000); // Give time for join to complete
+                return;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private static Integer promptForPeerPort() {
+        while (true) {
             System.out.print("Enter peer port (or 'n' to cancel): ");
             String portInput = scanner.nextLine().trim();
             
-            // Check for cancel
             if (portInput.equalsIgnoreCase("n")) {
-                System.out.println("Connection cancelled. Started as seed node.");
-                return;
+                return null;
             }
             
-            // Check for command
             if (portInput.startsWith("/")) {
                 handleCommand(portInput);
                 continue;
@@ -147,29 +207,13 @@ public class SimpleChatClient {
             
             try {
                 int peerPort = Integer.parseInt(portInput);
-                
                 if (peerPort < 1024 || peerPort > 65535) {
                     System.out.println("Port must be between 1024 and 65535!");
                     continue;
                 }
-                
-                System.out.println("Attempting to join " + peerIp + ":" + peerPort + "...");
-                node.joinNetwork(peerIp, peerPort);
-                
-                // Give time for join to complete
-                Thread.sleep(1000);
-                return;
-                
+                return peerPort;
             } catch (NumberFormatException e) {
                 System.out.println("Invalid port number!");
-                System.out.print("Try again? [Y]/n: ");
-                String retry = scanner.nextLine().trim();
-                if (!isYes(retry)) {
-                    System.out.println("Started as seed node.");
-                    return;
-                }
-            } catch (InterruptedException e) {
-                e.printStackTrace();
             }
         }
     }
@@ -238,9 +282,11 @@ public class SimpleChatClient {
         System.out.println("/peers          - Show known peers in current room");
         System.out.println("/messages       - Show all messages");
         System.out.println("/status         - Show node status");
-        System.out.println("/rooms          - List available chat rooms (TODO)");
+        System.out.println("/rooms          - List available chat rooms on network");
+        System.out.println("/join <number>  - Join a discovered room by number");
         System.out.println("/disconnect     - Disconnect from current network");
         System.out.println("/reconnect      - Reconnect to a network");
+        System.out.println("/roomname <name> - Rename your room");
         System.out.println("/help           - Show this help message");
         System.out.println("/quit           - Exit application");
         System.out.println("\nType a message and press Enter to send\n");
@@ -309,6 +355,22 @@ public class SimpleChatClient {
                 showRooms();
                 break;
                 
+            case "/join":
+                if (parts.length > 1) {
+                    joinRoomByNumber(parts[1]);
+                } else {
+                    System.out.println("Usage: /join <room_number>");
+                    System.out.println("First use /rooms to see available rooms");
+                }
+                break;
+            case "/roomname":
+                if (parts.length > 1) {
+                    renameRoom(parts[1].trim());
+                } else {
+                    System.out.println("Usage: /roomname <new name>");
+                }
+                break;
+                
             case "/disconnect":
                 disconnect();
                 break;
@@ -373,9 +435,33 @@ public class SimpleChatClient {
     }
     
     private static void showRooms() {
-        System.out.println("\n=== Available Chat Rooms ===");
-        System.out.println("Room discovery not yet implemented.");
-        System.out.println("TODO: This will show all discoverable chat networks");
+        if (node == null) return;
+        
+        var rooms = node.getDiscoveredRooms();
+        
+        System.out.println("\n=== Available Chat Rooms (" + rooms.size() + ") ===");
+        System.out.println("Discovery: Broadcasting on UDP ports 6000-6099");
+        System.out.println("Note: Make sure UDP broadcast is allowed by your firewall\n");
+        
+        if (rooms.isEmpty()) {
+            System.out.println("No rooms discovered on local network.");
+            System.out.println("\nYou can:");
+            System.out.println("  1. Wait for rooms to appear (quick initial discovery, then every 5 seconds)");
+            System.out.println("  2. Start your own room as seed node");
+            System.out.println("  3. Manually connect using IP:port if room is on different network");
+            System.out.println("\nTroubleshooting:");
+            System.out.println("  - Ensure other nodes are running and on the same network");
+            System.out.println("  - Check firewall allows UDP broadcast on ports 6000-6099");
+            System.out.println("  - On some networks, broadcast may be blocked - use manual connection");
+        } else {
+            int index = 1;
+            for (RoomInfo room : rooms) {
+                System.out.println("  " + index + ". " + room);
+                index++;
+            }
+            System.out.println("\nTo join a room, use: /join <number>");
+            System.out.println("Example: /join 1");
+        }
         System.out.println();
     }
     
@@ -419,5 +505,66 @@ public class SimpleChatClient {
                 System.err.println("Please restart the application to reconnect.");
             }
         }
+    }
+    
+    private static void joinRoomByNumber(String numberStr) {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+        
+        try {
+            int roomNumber = Integer.parseInt(numberStr.trim());
+            var rooms = new ArrayList<>(node.getDiscoveredRooms());
+            
+            if (roomNumber < 1 || roomNumber > rooms.size()) {
+                System.out.println("Invalid room number. Use /rooms to see available rooms.");
+                return;
+            }
+            
+            RoomInfo room = rooms.get(roomNumber - 1);
+            
+            System.out.println("Joining room: " + room.getRoomName());
+            
+            // Disconnect from current network if connected
+            if (node.isRunning() && !node.getAllPeers().isEmpty()) {
+                System.out.print("Disconnect from current room first? [Y]/n: ");
+                String confirm = scanner.nextLine().trim();
+                if (isYes(confirm)) {
+                    node.stop();
+                    Thread.sleep(500);
+                    node.start();
+                } else {
+                    System.out.println("Join cancelled.");
+                    return;
+                }
+            }
+            
+            // Join the selected room
+            node.prepareForJoin();
+            node.joinNetwork(room.getSeedNodeAddress(), room.getSeedNodePort());
+            Thread.sleep(1000);
+            
+            System.out.println("Joined room: " + room.getRoomName());
+            
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid room number. Please enter a number.");
+        } catch (Exception e) {
+            System.err.println("Failed to join room: " + e.getMessage());
+        }
+    }
+
+    private static void renameRoom(String newName) {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+        if (newName.isEmpty()) {
+            System.out.println("Room name cannot be empty.");
+            return;
+        }
+        node.setRoomName(newName);
+        node.triggerDiscoveryBroadcast();
+        System.out.println("Room renamed to: " + newName);
     }
 }
