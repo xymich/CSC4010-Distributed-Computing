@@ -6,6 +6,7 @@ import java.nio.file.Paths;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ChatNode {
@@ -35,6 +36,10 @@ public class ChatNode {
     
     // Message storage - using thread-safe collection
     private Map<UUID, ChatMessage> messageHistory;
+    private final Queue<NetworkPacket> deferredPackets;
+    private volatile boolean historySyncInProgress;
+    private volatile boolean outboundMutedForSync;
+    private volatile long highestHistoryTimestamp;
     
     // Network components
     private UDPHandler udpHandler;
@@ -61,7 +66,7 @@ public class ChatNode {
         this.roomId = UUID.randomUUID();
         this.roomName = roomName;
         
-        this.swarmId = 0;  // Default swarm
+        this.swarmId = deriveSwarmId(this.roomId);
         this.isSwarmKey = false;
         
         this.lamportClock = new AtomicLong(0);
@@ -71,6 +76,10 @@ public class ChatNode {
         this.keyNodePeers = ConcurrentHashMap.newKeySet();
         this.receivedFileIds = ConcurrentHashMap.newKeySet();
         this.messageHistory = new ConcurrentHashMap<>();
+        this.deferredPackets = new ConcurrentLinkedQueue<>();
+        this.historySyncInProgress = false;
+        this.outboundMutedForSync = false;
+        this.highestHistoryTimestamp = 0L;
         
         this.fragmentAssembler = new FragmentAssembler();
         this.running = false;
@@ -146,13 +155,19 @@ public class ChatNode {
             syncSelfPeerInfo();
             return;
         }
+        adoptSwarmFromPeer(peer);
+
+        boolean sameSwarm = peer.getSwarmId() == this.swarmId;
+        boolean isForeignKey = peer.isSwarmKey() && !sameSwarm;
+        if (!sameSwarm && !isForeignKey) {
+            return; // Do not keep arbitrary members from other swarms
+        }
+
         knownPeers.put(peer.getNodeId(), peer);
-        if (peer.getSwarmId() == this.swarmId) {
+        if (sameSwarm) {
             swarmPeers.add(peer.getNodeId());
             swarmManager.addSwarmMember(peer);
-        }
-        
-        if (peer.isSwarmKey() && peer.getSwarmId() != this.swarmId) {
+        } else if (isForeignKey) {
             keyNodePeers.add(peer.getNodeId());
             swarmManager.addKeyNode(peer);
         }
@@ -248,6 +263,12 @@ public class ChatNode {
             return false;
         }
 
+        if (historySyncInProgress) {
+            System.out.println("History sync already in progress. Please wait.");
+            return false;
+        }
+
+        beginHistorySync("manual resync request");
         messageHistory.clear();
         System.out.println("Requesting chat history sync from peers...");
 
@@ -307,6 +328,23 @@ public class ChatNode {
         self.setJoinTime(joinTime);
     }
 
+    private void adoptSwarmFromPeer(PeerInfo peer) {
+        if (isSwarmKey) {
+            return;
+        }
+        if (!peer.isSwarmKey()) {
+            return;
+        }
+        if (!swarmPeers.isEmpty()) {
+            return;
+        }
+        if (this.swarmId == peer.getSwarmId()) {
+            return;
+        }
+        System.out.println("Adopting swarm ID " + peer.getSwarmId() + " from key node " + peer.getNickname());
+        setSwarmId(peer.getSwarmId());
+    }
+
     private Path initLogPath() {
         try {
             Path logDir = Paths.get("logs");
@@ -340,6 +378,11 @@ public class ChatNode {
         } catch (Exception e) {
             System.err.println("Failed to write chat log: " + e.getMessage());
         }
+    }
+
+    private int deriveSwarmId(UUID sourceId) {
+        int hash = sourceId.hashCode();
+        return Math.floorMod(hash, 100_000) + 1; // keep ids positive and within a readable range
     }
     
     // ===== NETWORK OPERATIONS =====
@@ -423,6 +466,7 @@ public class ChatNode {
      */
     public void joinNetwork(String peerAddress, int peerPort) {
         System.out.println("Joining network via " + peerAddress + ":" + peerPort);
+        beginHistorySync("joining network");
         
         // Send join request
         NetworkPacket joinPacket = new NetworkPacket(
@@ -445,6 +489,10 @@ public class ChatNode {
      * Send a chat message to the network
      */
     public void sendChatMessage(String content) {
+        if (outboundMutedForSync) {
+            System.out.println("History sync in progress. Please wait until it completes before sending messages.");
+            return;
+        }
         long timestamp = incrementClock();
         ChatMessage message = new ChatMessage(nodeId, nickname, content, timestamp);
         
@@ -480,12 +528,18 @@ public class ChatNode {
                 return; // Still waiting for more fragments
             }
             
+            if (shouldDeferDuringSync(completePacket)) {
+                deferPacket(completePacket);
+                return;
+            }
+
             // Update Lamport clock
             updateClock(completePacket.getLamportTimestamp());
             
             // Handle based on type
             switch (completePacket.getType()) {
                 case CHAT_MESSAGE -> handleChatMessage(completePacket);
+                case HISTORY_SNAPSHOT -> handleHistorySnapshot(completePacket);
                 case JOIN_REQUEST -> handleJoinRequest(completePacket, senderAddress, senderPort);
                 case PEER_DISCOVERY -> handlePeerDiscovery(completePacket);
                 case PEER_LIST -> handlePeerList(completePacket);
@@ -508,22 +562,34 @@ public class ChatNode {
     // ===== PACKET HANDLERS =====
     
     private void handleChatMessage(NetworkPacket packet) {
+        processIncomingChat(packet, true);
+    }
+
+    private void processIncomingChat(NetworkPacket packet, boolean shouldForward) {
         ChatMessage message = (ChatMessage) packet.getPayload();
-        
+
+        if (message == null) {
+            return;
+        }
+
         // Check if we already have this message (deduplication)
         if (hasMessage(message.getMessageId())) {
             return;
         }
-        
+
         // Store message
         addMessage(message);
-        
+
         // Display message
         System.out.println(message);
-        
+
+        if (!shouldForward) {
+            return;
+        }
+
         // Forward to swarm peers (except sender)
         forwardToSwarm(packet, packet.getSenderId());
-        
+
         // If we're a key node, forward to other key nodes
         if (isSwarmKey) {
             forwardToKeyNodes(packet, packet.getSenderId());
@@ -696,6 +762,7 @@ public class ChatNode {
     }
 
     public void prepareForJoin() {
+        leaveCurrentSwarm(!swarmPeers.isEmpty());
         setSwarmKey(false);
         setDiscoveryBroadcastEnabled(false);
     }
@@ -757,6 +824,20 @@ public class ChatNode {
             }
         }
     }
+
+    private void leaveCurrentSwarm(boolean notifyPeers) {
+        if (notifyPeers && running) {
+            sendLeaveNotification();
+        }
+        knownPeers.clear();
+        swarmPeers.clear();
+        keyNodePeers.clear();
+        swarmManager.resetMembership();
+        historySyncInProgress = false;
+        outboundMutedForSync = false;
+        deferredPackets.clear();
+        knownPeers.put(nodeId, createOwnPeerInfo());
+    }
     
     private void sendPeerListTo(String address, int port) {
         var peerList = new java.util.ArrayList<>(knownPeers.values());
@@ -777,21 +858,25 @@ public class ChatNode {
     }
     
     private void sendChatHistoryTo(String address, int port) {
-        for (ChatMessage message : getAllMessages()) {
-            NetworkPacket packet = new NetworkPacket(
-                MessageType.CHAT_MESSAGE,
-                message.getSenderId(),
-                message.getSenderNickname(),
-                message.getLamportTimestamp(),
-                message
-            );
-            
-            try {
-                udpHandler.sendWithFragmentation(packet, address, port);
-                Thread.sleep(10); // Small delay between messages
-            } catch (Exception e) {
-                System.err.println("Failed to send chat history: " + e.getMessage());
-            }
+        java.util.List<ChatMessage> history = new java.util.ArrayList<>(getAllMessages());
+        long cursor = history.stream()
+            .mapToLong(ChatMessage::getLamportTimestamp)
+            .max()
+            .orElse(getClock());
+
+        ChatHistorySnapshot snapshot = new ChatHistorySnapshot(history, cursor);
+        NetworkPacket packet = new NetworkPacket(
+            MessageType.HISTORY_SNAPSHOT,
+            nodeId,
+            nickname,
+            incrementClock(),
+            snapshot
+        );
+
+        try {
+            udpHandler.sendWithFragmentation(packet, address, port);
+        } catch (Exception e) {
+            System.err.println("Failed to send chat history snapshot: " + e.getMessage());
         }
     }
     
@@ -824,6 +909,91 @@ public class ChatNode {
     
     public boolean isRunning() {
         return running;
+    }
+
+    private void beginHistorySync(String reason) {
+        if (historySyncInProgress) {
+            return;
+        }
+        historySyncInProgress = true;
+        outboundMutedForSync = true;
+        highestHistoryTimestamp = 0L;
+        deferredPackets.clear();
+        System.out.println("Starting history sync (" + reason + "). Outbound chat muted until completion.");
+    }
+
+    private boolean shouldDeferDuringSync(NetworkPacket packet) {
+        return historySyncInProgress && packet.getType() == MessageType.CHAT_MESSAGE;
+    }
+
+    private void deferPacket(NetworkPacket packet) {
+        deferredPackets.add(packet);
+    }
+
+    private void handleHistorySnapshot(NetworkPacket packet) {
+        ChatHistorySnapshot snapshot = (ChatHistorySnapshot) packet.getPayload();
+        if (snapshot == null) {
+            System.out.println("Received empty history snapshot from " + packet.getSenderNickname());
+            completeHistorySyncIfPending();
+            return;
+        }
+
+        java.util.List<ChatMessage> snapshotMessages = new java.util.ArrayList<>(snapshot.getMessages());
+        snapshotMessages.sort(Comparator
+            .comparingLong(ChatMessage::getLamportTimestamp)
+            .thenComparing(ChatMessage::getMessageId));
+
+        int applied = 0;
+        for (ChatMessage message : snapshotMessages) {
+            if (hasMessage(message.getMessageId())) {
+                continue;
+            }
+            addMessage(message);
+            System.out.println(message);
+            applied++;
+        }
+
+        highestHistoryTimestamp = Math.max(highestHistoryTimestamp, snapshot.getLamportCursor());
+        System.out.println("Applied history snapshot (" + applied + " new messages) from " + packet.getSenderNickname());
+        completeHistorySyncIfPending();
+    }
+
+    private void completeHistorySyncIfPending() {
+        if (!historySyncInProgress) {
+            return;
+        }
+        completeHistorySync();
+    }
+
+    private void completeHistorySync() {
+        long newClock = Math.max(lamportClock.get(), highestHistoryTimestamp) + 1;
+        lamportClock.set(newClock);
+        historySyncInProgress = false;
+        outboundMutedForSync = false;
+        flushDeferredPackets();
+        System.out.println("History sync complete. You may resume chatting.");
+    }
+
+    private void flushDeferredPackets() {
+        if (deferredPackets.isEmpty()) {
+            return;
+        }
+
+        java.util.List<NetworkPacket> drained = new java.util.ArrayList<>();
+        NetworkPacket queued;
+        while ((queued = deferredPackets.poll()) != null) {
+            drained.add(queued);
+        }
+
+        drained.sort(Comparator
+            .comparingLong(NetworkPacket::getLamportTimestamp)
+            .thenComparing(packet -> packet.getSenderId() == null ? new UUID(0L, 0L) : packet.getSenderId()));
+
+        for (NetworkPacket deferred : drained) {
+            if (deferred.getType() == MessageType.CHAT_MESSAGE) {
+                processIncomingChat(deferred, false);
+            }
+        }
     }
     
     // ===== KEY NODE HANDLERS =====

@@ -252,4 +252,14 @@ public class SwarmManager {
     public Collection<PeerInfo> getSwarmMembers() {
         return new ArrayList<>(swarmMembers.values());
     }
+
+    /**
+     * Clear all state so the node can safely join a fresh swarm.
+     */
+    public void resetMembership() {
+        swarmMembers.clear();
+        knownKeyNodes.clear();
+        currentKeyNode = null;
+        node.setSwarmKey(false);
+    }
 }
