@@ -36,6 +36,11 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     // ===== PENDING MESSAGE TRACKING =====
     // Maps messageId -> (start position, end position) in chat pane
     private Map<UUID, int[]> pendingMessagePositions = new ConcurrentHashMap<>();
+    
+    // ===== BUFFERED OUTPUT =====
+    // Buffer messages before GUI is ready
+    private java.util.List<String> bufferedMessages = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    private volatile boolean guiReady = false;
 
     // ===== UI COMPONENTS =====
     private JTextPane chatPane;
@@ -46,6 +51,9 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     private JList<String> roomList;
     private JLabel statusLabel;
     private JLabel roomNameLabel;
+    
+    // Store original System.out for restoration
+    private PrintStream originalOut;
 
     // ===== SETUP =====
     private String nickname;
@@ -54,6 +62,8 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
 
     public ChatGUI() {
         // Don't show main window yet - show setup first
+        // Capture original System.out
+        originalOut = System.out;
     }
 
     public void initialize() {
@@ -137,6 +147,9 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
             this.port = p;
 
             try {
+                // Redirect System.out BEFORE creating the node so we capture all messages
+                redirectSystemOut();
+                
                 node = new ChatNode(nickname, advertisedIp, port);
                 node.addMessageStatusListener(this);  // Register for delivery status updates
                 node.start();
@@ -193,8 +206,8 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
 
         add(mainPanel);
 
-        // Redirect System.out to chat
-        redirectSystemOut();
+        // Flush buffered messages to GUI and mark as ready
+        flushBufferedMessages();
 
         setVisible(true);
 
@@ -760,14 +773,29 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     }
 
     private void redirectSystemOut() {
-        PrintStream guiOut = new PrintStream(System.out) {
+        PrintStream guiOut = new PrintStream(originalOut) {
             @Override
             public void println(String x) {
                 super.println(x);
-                appendChat(x, TEXT_COLOR);
+                if (guiReady && chatPane != null) {
+                    appendChat(x, TEXT_COLOR);
+                } else {
+                    // Buffer messages until GUI is ready
+                    bufferedMessages.add(x);
+                }
             }
         };
         System.setOut(guiOut);
+    }
+    
+    private void flushBufferedMessages() {
+        guiReady = true;
+        synchronized (bufferedMessages) {
+            for (String msg : bufferedMessages) {
+                appendChat(msg, TEXT_COLOR);
+            }
+            bufferedMessages.clear();
+        }
     }
 
     private void shutdown() {

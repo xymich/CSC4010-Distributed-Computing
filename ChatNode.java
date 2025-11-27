@@ -40,6 +40,8 @@ public class ChatNode {
     private volatile boolean historySyncInProgress;
     private volatile boolean outboundMutedForSync;
     private volatile long highestHistoryTimestamp;
+    private java.util.Timer historySyncTimer;
+    private static final long HISTORY_SYNC_TIMEOUT_MS = 5000; // 5 second timeout
     
     // Pending message tracking for delivery status
     private Set<UUID> pendingMessages;  // Messages awaiting ACK
@@ -1003,6 +1005,26 @@ public class ChatNode {
         highestHistoryTimestamp = 0L;
         deferredPackets.clear();
         System.out.println("Starting history sync (" + reason + "). Outbound chat muted until completion.");
+        
+        // Start timeout timer - if no snapshot received in time, complete anyway
+        cancelHistorySyncTimer();
+        historySyncTimer = new java.util.Timer("HistorySyncTimeout", true);
+        historySyncTimer.schedule(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                if (historySyncInProgress) {
+                    System.out.println("History sync timed out. Completing with available data.");
+                    completeHistorySync();
+                }
+            }
+        }, HISTORY_SYNC_TIMEOUT_MS);
+    }
+    
+    private void cancelHistorySyncTimer() {
+        if (historySyncTimer != null) {
+            historySyncTimer.cancel();
+            historySyncTimer = null;
+        }
     }
 
     private boolean shouldDeferDuringSync(NetworkPacket packet) {
@@ -1049,6 +1071,7 @@ public class ChatNode {
     }
 
     private void completeHistorySync() {
+        cancelHistorySyncTimer();  // Cancel timeout since we completed normally
         long newClock = Math.max(lamportClock.get(), highestHistoryTimestamp) + 1;
         lamportClock.set(newClock);
         historySyncInProgress = false;
