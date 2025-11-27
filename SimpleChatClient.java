@@ -1,8 +1,10 @@
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Random;
 import java.util.Scanner;
 
@@ -324,6 +326,9 @@ public class SimpleChatClient {
         System.out.println("/roomname <name> - Rename your room");
         System.out.println("/resync         - Rebuild chat history from peers");
         System.out.println("/sendfile <path> - Broadcast a file to the room");
+        System.out.println("/clear          - Clear the local console view");
+        System.out.println("/seed <ip> <port> - Add a remote discovery seed (unicast)");
+        System.out.println("/seeds         - Show configured discovery seeds");
         System.out.println("/netloss [0-100] - Simulate packet loss percentage");
         System.out.println("/robot          - Toggle automated robot chatter");
         System.out.println("/help           - Show this help message");
@@ -413,6 +418,12 @@ public class SimpleChatClient {
             case "/resync":
                 rebuildHistory();
                 break;
+            case "/seed":
+                addDiscoverySeed(parts.length > 1 ? parts[1].trim() : "");
+                break;
+            case "/seeds":
+                showDiscoverySeeds();
+                break;
             case "/netloss":
                 if (parts.length > 1) {
                     configureNetworkLoss(parts[1].trim());
@@ -437,6 +448,9 @@ public class SimpleChatClient {
                 
             case "/reconnect":
                 reconnect();
+                break;
+            case "/clear":
+                clearConsole();
                 break;
                 
             case "/help":
@@ -523,6 +537,13 @@ public class SimpleChatClient {
             System.out.println("Example: /join 1");
         }
         System.out.println();
+    }
+
+    private static void clearConsole() {
+        for (int i = 0; i < 50; i++) {
+            System.out.println();
+        }
+        System.out.println("-- Screen cleared (local view only) --");
     }
     
     private static void disconnect() {
@@ -674,6 +695,50 @@ public class SimpleChatClient {
             System.out.println("Network loss simulation is currently disabled.");
         } else {
             System.out.println(String.format("Current simulated loss: outbound %.1f%%, inbound %.1f%%", outbound, inbound));
+        }
+    }
+
+    private static void addDiscoverySeed(String args) {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+        String[] tokens = args.split("\\s+");
+        if (tokens.length != 2) {
+            System.out.println("Usage: /seed <ip> <port>");
+            return;
+        }
+        String ip = tokens[0];
+        if (!isValidIP(ip)) {
+            System.out.println("Invalid IP address.");
+            return;
+        }
+        try {
+            int port = Integer.parseInt(tokens[1]);
+            if (port < 1024 || port > 65535) {
+                System.out.println("Port must be between 1024 and 65535.");
+                return;
+            }
+            node.addDiscoverySeed(ip, port);
+            System.out.println("Added remote discovery seed " + ip + ":" + port + ".");
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid port number. Usage: /seed <ip> <port>");
+        }
+    }
+
+    private static void showDiscoverySeeds() {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+        Collection<InetSocketAddress> seeds = node.getDiscoverySeeds();
+        if (seeds.isEmpty()) {
+            System.out.println("No remote discovery seeds configured.");
+            return;
+        }
+        System.out.println("Configured seeds:");
+        for (InetSocketAddress seed : seeds) {
+            System.out.println("  - " + seed.getAddress().getHostAddress() + ":" + seed.getPort());
         }
     }
 

@@ -154,7 +154,7 @@ public class SwarmManager {
     /**
      * Broadcast our key node status to swarm
      */
-    private void broadcastKeyNodeStatus() {
+    public void broadcastKeyNodeStatus() {
         NetworkPacket packet = new NetworkPacket(
             MessageType.KEY_NODE_ANNOUNCE,
             node.getNodeId(),

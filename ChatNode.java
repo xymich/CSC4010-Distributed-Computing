@@ -1,6 +1,9 @@
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -42,6 +45,8 @@ public class ChatNode {
     
     // Join time tracking
     private long joinTime;
+    private Path logFilePath;
+    private final DateTimeFormatter logTimestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     
     public ChatNode(String nickname, String ipAddress, int port) {
         this(nickname, ipAddress, port, "General Chat");
@@ -87,6 +92,7 @@ public class ChatNode {
         );
         discoveryHandler.setBroadcastEnabled(false); // enable once we become an active room
         knownPeers.put(nodeId, createOwnPeerInfo());
+        this.logFilePath = initLogPath();
     }
     
     // Lamport clock operations
@@ -193,6 +199,7 @@ public class ChatNode {
     public void addMessage(ChatMessage message) {
         messageHistory.put(message.getMessageId(), message);
         updateClock(message.getLamportTimestamp());
+        appendMessageToLog(message);
     }
     
     public Collection<ChatMessage> getAllMessages() {
@@ -254,7 +261,20 @@ public class ChatNode {
 
         broadcastToSwarm(syncRequest);
         broadcastToKeyNodes(syncRequest);
+        requestKeyStatusFromPeers();
         return true;
+    }
+
+    private void requestKeyStatusFromPeers() {
+        NetworkPacket request = new NetworkPacket(
+            MessageType.KEY_NODE_REQUEST,
+            nodeId,
+            nickname,
+            incrementClock(),
+            null
+        );
+        broadcastToSwarm(request);
+        broadcastToKeyNodes(request);
     }
     
     public boolean hasMessage(UUID messageId) {
@@ -285,6 +305,41 @@ public class ChatNode {
         self.setSwarmKey(isSwarmKey);
         self.setSwarmId(swarmId);
         self.setJoinTime(joinTime);
+    }
+
+    private Path initLogPath() {
+        try {
+            Path logDir = Paths.get("logs");
+            Files.createDirectories(logDir);
+            String safeNickname = nickname.replaceAll("[^A-Za-z0-9_-]", "_");
+            String filename = String.format("%s_%s.log", safeNickname, nodeId.toString().substring(0, 8));
+            Path path = logDir.resolve(filename);
+            if (!Files.exists(path)) {
+                Files.createFile(path);
+            }
+            return path;
+        } catch (Exception e) {
+            System.err.println("Failed to prepare log file: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private void appendMessageToLog(ChatMessage message) {
+        if (logFilePath == null) {
+            return;
+        }
+        String line = String.format(
+            "%s [%s] %s: %s%n",
+            java.time.LocalDateTime.now().format(logTimestampFormatter),
+            swarmId,
+            message.getSenderNickname(),
+            message.getContent()
+        );
+        try {
+            Files.writeString(logFilePath, line, StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception e) {
+            System.err.println("Failed to write chat log: " + e.getMessage());
+        }
     }
     
     // ===== NETWORK OPERATIONS =====
@@ -502,6 +557,8 @@ public class ChatNode {
         
         // Send them all chat history
         sendChatHistoryTo(senderAddress, senderPort);
+        // Share key status along with history to ensure metadata is consistent
+        swarmManager.broadcastKeyNodeStatus();
         
         // Notify other peers about the new peer
         broadcastPeerDiscovery(newPeer);
@@ -561,6 +618,7 @@ public class ChatNode {
         System.out.println("History sync requested by " + packet.getSenderNickname() +
                            ". Sending " + messageHistory.size() + " messages.");
         sendChatHistoryTo(senderAddress, senderPort);
+        swarmManager.broadcastKeyNodeStatus();
     }
 
     private void handleFileTransfer(NetworkPacket packet) {
@@ -652,6 +710,20 @@ public class ChatNode {
         if (discoveryHandler != null) {
             discoveryHandler.triggerImmediateBroadcast();
         }
+    }
+
+    public void addDiscoverySeed(String address, int port) {
+        if (discoveryHandler != null) {
+            discoveryHandler.addUnicastTarget(address, port);
+            discoveryHandler.triggerImmediateBroadcast();
+        }
+    }
+
+    public Collection<InetSocketAddress> getDiscoverySeeds() {
+        if (discoveryHandler != null) {
+            return discoveryHandler.getUnicastTargets();
+        }
+        return Collections.emptyList();
     }
     
     public void sendTo(NetworkPacket packet, String address, int port) throws Exception {
@@ -793,5 +865,6 @@ public class ChatNode {
         
         System.out.println(packet.getSenderNickname() + " requested key node list");
         swarmManager.shareKeyNodes();
+        swarmManager.broadcastKeyNodeStatus();
     }
 }

@@ -2,6 +2,7 @@ import java.io.IOException;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class DiscoveryHandler {
     
@@ -23,6 +24,7 @@ public class DiscoveryHandler {
     private int nodePort;
     private volatile boolean networkBroadcastWarningLogged;
     private volatile boolean broadcastEnabled = true;
+    private CopyOnWriteArrayList<InetSocketAddress> unicastTargets = new CopyOnWriteArrayList<>();
     
     private Map<UUID, RoomInfo> discoveredRooms;
     private DiscoveryListener listener;
@@ -238,6 +240,16 @@ public class DiscoveryHandler {
                                        " (continuing with localhost discovery)");
                 }
             }
+
+            // Send directly to any configured unicast targets (cross-network seeds)
+            for (InetSocketAddress target : unicastTargets) {
+                DatagramPacket packet = new DatagramPacket(data, data.length, target);
+                try {
+                    socket.send(packet);
+                } catch (IOException e) {
+                    System.err.println("Failed to reach discovery seed " + target + ": " + e.getMessage());
+                }
+            }
             
         } catch (IOException e) {
             if (running) {
@@ -260,6 +272,22 @@ public class DiscoveryHandler {
         }
     }
     
+    public void addUnicastTarget(String address, int port) {
+        try {
+            InetSocketAddress target = new InetSocketAddress(address, port);
+            if (!unicastTargets.contains(target)) {
+                unicastTargets.add(target);
+                System.out.println("Added discovery seed " + target);
+            }
+        } catch (Exception e) {
+            System.err.println("Invalid discovery seed: " + e.getMessage());
+        }
+    }
+
+    public List<InetSocketAddress> getUnicastTargets() {
+        return new ArrayList<>(unicastTargets);
+    }
+
     /**
      * Handle received discovery packet
      */
