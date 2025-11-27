@@ -1,3 +1,6 @@
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -25,6 +28,7 @@ public class ChatNode {
     private Map<UUID, PeerInfo> knownPeers;
     private Set<UUID> swarmPeers;      // Peers in same swarm
     private Set<UUID> keyNodePeers;    // Key nodes from other swarms
+    private Set<UUID> receivedFileIds;
     
     // Message storage - using thread-safe collection
     private Map<UUID, ChatMessage> messageHistory;
@@ -60,6 +64,7 @@ public class ChatNode {
         this.knownPeers = new ConcurrentHashMap<>();
         this.swarmPeers = ConcurrentHashMap.newKeySet();
         this.keyNodePeers = ConcurrentHashMap.newKeySet();
+        this.receivedFileIds = ConcurrentHashMap.newKeySet();
         this.messageHistory = new ConcurrentHashMap<>();
         
         this.fragmentAssembler = new FragmentAssembler();
@@ -74,11 +79,11 @@ public class ChatNode {
         this.udpHandler = null;
         
         this.discoveryHandler = new DiscoveryHandler(
-            roomId, 
-            roomName, 
-            ipAddress, 
-            port, 
-            () -> knownPeers.size() + 1 // +1 for self
+            roomId,
+            roomName,
+            ipAddress,
+            port,
+            this::getSwarmMemberCount
         );
         discoveryHandler.setBroadcastEnabled(false); // enable once we become an active room
         knownPeers.put(nodeId, createOwnPeerInfo());
@@ -172,6 +177,10 @@ public class ChatNode {
                 .filter(Objects::nonNull)
                 .toList();
     }
+
+    public int getSwarmMemberCount() {
+        return swarmPeers.size() + 1; // include self
+    }
     
     public Collection<PeerInfo> getKeyNodePeers() {
         return keyNodePeers.stream()
@@ -191,6 +200,61 @@ public class ChatNode {
                 .sorted(Comparator.comparingLong(ChatMessage::getLamportTimestamp)
                         .thenComparing(ChatMessage::getMessageId))
                 .toList();
+    }
+
+    public boolean sendFile(String fileName, byte[] data) {
+        if (!running) {
+            System.out.println("Cannot send file while node is stopped.");
+            return false;
+        }
+        if (data == null || data.length == 0) {
+            System.out.println("File is empty. Nothing to send.");
+            return false;
+        }
+        FileTransfer transfer = new FileTransfer(
+            UUID.randomUUID(),
+            fileName,
+            data.length,
+            data,
+            nickname
+        );
+
+        NetworkPacket packet = new NetworkPacket(
+            MessageType.FILE_TRANSFER,
+            nodeId,
+            nickname,
+            incrementClock(),
+            transfer
+        );
+
+        broadcastToSwarm(packet);
+        broadcastToKeyNodes(packet);
+        System.out.println("Broadcasting file '" + fileName + "' to swarm peers...");
+        return true;
+    }
+
+    public boolean rebuildChatHistory() {
+        boolean hasSwarmPeers = !swarmPeers.isEmpty();
+        boolean hasKeyPeers = !keyNodePeers.isEmpty();
+        if (!hasSwarmPeers && !hasKeyPeers) {
+            System.out.println("No peers available to rebuild chat history.");
+            return false;
+        }
+
+        messageHistory.clear();
+        System.out.println("Requesting chat history sync from peers...");
+
+        NetworkPacket syncRequest = new NetworkPacket(
+            MessageType.MESSAGE_SYNC,
+            nodeId,
+            nickname,
+            incrementClock(),
+            null
+        );
+
+        broadcastToSwarm(syncRequest);
+        broadcastToKeyNodes(syncRequest);
+        return true;
     }
     
     public boolean hasMessage(UUID messageId) {
@@ -372,9 +436,11 @@ public class ChatNode {
                 case PEER_LIST -> handlePeerList(completePacket);
                 case HEARTBEAT -> handleHeartbeat(completePacket);
                 case LEAVE_NOTIFY -> handleLeaveNotify(completePacket);
+                case MESSAGE_SYNC -> handleMessageSync(completePacket, senderAddress, senderPort);
                 case KEY_NODE_ANNOUNCE -> handleKeyNodeAnnounce(completePacket);
                 case KEY_NODE_LIST -> handleKeyNodeList(completePacket);
                 case KEY_NODE_REQUEST -> handleKeyNodeRequest(completePacket);
+                case FILE_TRANSFER -> handleFileTransfer(completePacket);
                 default -> System.out.println("Unknown packet type: " + completePacket.getType());
             }
             
@@ -479,6 +545,70 @@ public class ChatNode {
             System.out.println("Peer leaving: " + peer.getNickname());
             removePeer(leavingPeerId);
         }
+    }
+
+    private void handleMessageSync(NetworkPacket packet, String senderAddress, int senderPort) {
+        if (packet.getSenderId().equals(nodeId)) {
+            return; // ignore self
+        }
+
+        PeerInfo requester = getPeer(packet.getSenderId());
+        if (requester != null && requester.getSwarmId() != this.swarmId) {
+            System.out.println("Ignoring history request from different swarm node " + requester.getNickname());
+            return;
+        }
+
+        System.out.println("History sync requested by " + packet.getSenderNickname() +
+                           ". Sending " + messageHistory.size() + " messages.");
+        sendChatHistoryTo(senderAddress, senderPort);
+    }
+
+    private void handleFileTransfer(NetworkPacket packet) {
+        FileTransfer transfer = (FileTransfer) packet.getPayload();
+        if (transfer == null || transfer.getData() == null) {
+            System.out.println("Received invalid file transfer payload.");
+            return;
+        }
+
+        if (!receivedFileIds.add(transfer.getFileId())) {
+            return; // already processed
+        }
+
+        try {
+            Path downloadDir = Paths.get("downloads", nickname.replaceAll("[^A-Za-z0-9_-]", "_"));
+            Files.createDirectories(downloadDir);
+            String sanitizedName = sanitizeFileName(transfer.getFileName());
+            String finalName = String.format("%s_%s_%d",
+                    transfer.getSenderNickname().replaceAll("[^A-Za-z0-9_-]", "_"),
+                    sanitizedName,
+                    System.currentTimeMillis());
+            Path filePath = downloadDir.resolve(finalName);
+            Files.write(filePath, transfer.getData());
+            System.out.println("Received file '" + transfer.getFileName() + "' (" +
+                    formatBytes(transfer.getFileSize()) + ") from " + transfer.getSenderNickname());
+            System.out.println("Saved to " + filePath.toAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("Failed to save incoming file: " + e.getMessage());
+        }
+    }
+
+    private String sanitizeFileName(String name) {
+        if (name == null || name.isBlank()) {
+            return "file";
+        }
+        return name.replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    private String formatBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        double kb = bytes / 1024.0;
+        if (kb < 1024) {
+            return String.format("%.1f KB", kb);
+        }
+        double mb = kb / 1024.0;
+        return String.format("%.2f MB", mb);
     }
     
     // ===== HELPER METHODS =====

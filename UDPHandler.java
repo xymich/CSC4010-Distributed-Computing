@@ -80,6 +80,11 @@ public class UDPHandler {
             throw new IOException("Packet too large: " + data.length + " bytes");
         }
         
+        if (NetworkConditions.shouldDropOutbound()) {
+            System.out.println("[Simulated] Dropped outbound packet to " + address + ":" + port);
+            return;
+        }
+        
         InetAddress inetAddress = InetAddress.getByName(address);
         DatagramPacket datagramPacket = new DatagramPacket(data, data.length, inetAddress, port);
         
@@ -137,6 +142,11 @@ public class UDPHandler {
                 // Get sender info
                 String senderAddress = datagramPacket.getAddress().getHostAddress();
                 int senderPort = datagramPacket.getPort();
+
+                if (NetworkConditions.shouldDropInbound()) {
+                    System.out.println("[Simulated] Dropped inbound packet from " + senderAddress + ":" + senderPort);
+                    continue;
+                }
                 
                 // Handle packet in thread pool
                 executorService.submit(() -> handleReceivedPacket(data, senderAddress, senderPort));

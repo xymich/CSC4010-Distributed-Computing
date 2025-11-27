@@ -1,5 +1,9 @@
 import java.net.InetAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Random;
 import java.util.Scanner;
 
 public class SimpleChatClient {
@@ -8,6 +12,18 @@ public class SimpleChatClient {
     private static Scanner scanner;
     private static boolean running = true;
     private static String advertisedIp;
+    private static volatile boolean robotEnabled;
+    private static Thread robotThread;
+    private static final long MAX_FILE_BYTES = 2 * 1024 * 1024; // 2 MB safety limit
+    private static final String[] ROBOT_MESSAGES = {
+        "Hello.",
+        "Robot status: still online.",
+        "Anyone else love Lamport clocks?",
+        "Latency feels nice from here.",
+        "Robot message: 00111000010100101001"
+    };
+    private static final long ROBOT_MIN_DELAY_MS = 2000;
+    private static final long ROBOT_MAX_DELAY_MS = 6000;
     
     public static void main(String[] args) {
         scanner = new Scanner(System.in);
@@ -306,6 +322,10 @@ public class SimpleChatClient {
         System.out.println("/disconnect     - Disconnect from current network");
         System.out.println("/reconnect      - Reconnect to a network");
         System.out.println("/roomname <name> - Rename your room");
+        System.out.println("/resync         - Rebuild chat history from peers");
+        System.out.println("/sendfile <path> - Broadcast a file to the room");
+        System.out.println("/netloss [0-100] - Simulate packet loss percentage");
+        System.out.println("/robot          - Toggle automated robot chatter");
         System.out.println("/help           - Show this help message");
         System.out.println("/quit           - Exit application");
         System.out.println("\nType a message and press Enter to send\n");
@@ -351,6 +371,7 @@ public class SimpleChatClient {
         
         switch (command) {
             case "/quit":
+                stopRobot(true);
                 if (node != null) {
                     node.stop();
                 }
@@ -388,6 +409,26 @@ public class SimpleChatClient {
                 } else {
                     System.out.println("Usage: /roomname <new name>");
                 }
+                break;
+            case "/resync":
+                rebuildHistory();
+                break;
+            case "/netloss":
+                if (parts.length > 1) {
+                    configureNetworkLoss(parts[1].trim());
+                } else {
+                    showNetworkLoss();
+                }
+                break;
+            case "/sendfile":
+                if (parts.length > 1) {
+                    sendFile(parts[1].trim());
+                } else {
+                    System.out.println("Usage: /sendfile <path>");
+                }
+                break;
+            case "/robot":
+                toggleRobot();
                 break;
                 
             case "/disconnect":
@@ -494,6 +535,7 @@ public class SimpleChatClient {
         String confirm = scanner.nextLine().trim();
         
         if (isYes(confirm)) {
+            stopRobot(false);
             node.stop();
             System.out.println("Disconnected from network.");
             System.out.println("Use /reconnect to join another network or /quit to exit.");
@@ -518,6 +560,9 @@ public class SimpleChatClient {
         try {
             node.start();
             connectToNetwork();
+            if (robotEnabled && (robotThread == null || !robotThread.isAlive())) {
+                toggleRobot();
+            }
         } catch (Exception e) {
             System.err.println("Failed to reconnect: " + e.getMessage());
             if (e.getMessage() != null && e.getMessage().contains("Socket closed")) {
@@ -585,5 +630,141 @@ public class SimpleChatClient {
         node.setRoomName(newName);
         node.triggerDiscoveryBroadcast();
         System.out.println("Room renamed to: " + newName);
+    }
+
+    private static void rebuildHistory() {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+        if (!node.isRunning()) {
+            System.out.println("Not connected. Use /reconnect before resyncing history.");
+            return;
+        }
+        boolean success = node.rebuildChatHistory();
+        if (success) {
+            System.out.println("Requested chat history from peers. Messages will repopulate shortly.");
+        } else {
+            System.out.println("No peers available to rebuild history right now.");
+        }
+    }
+
+    private static void configureNetworkLoss(String percentStr) {
+        try {
+            double percent = Double.parseDouble(percentStr);
+            if (percent < 0 || percent > 100) {
+                System.out.println("Value must be between 0 and 100.");
+                return;
+            }
+            NetworkConditions.setDropPercent(percent);
+            if (percent == 0) {
+                System.out.println("Network loss simulation disabled.");
+            } else {
+                System.out.println("Simulating ~" + percent + "% packet loss on inbound and outbound traffic.");
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid number. Usage: /netloss <0-100>");
+        }
+    }
+
+    private static void showNetworkLoss() {
+        double outbound = NetworkConditions.getOutboundDropPercent();
+        double inbound = NetworkConditions.getInboundDropPercent();
+        if (outbound == 0 && inbound == 0) {
+            System.out.println("Network loss simulation is currently disabled.");
+        } else {
+            System.out.println(String.format("Current simulated loss: outbound %.1f%%, inbound %.1f%%", outbound, inbound));
+        }
+    }
+
+    private static void sendFile(String rawPath) {
+        if (node == null || !node.isRunning()) {
+            System.out.println("Join a room before sending files.");
+            return;
+        }
+        if (rawPath == null || rawPath.isBlank()) {
+            System.out.println("Usage: /sendfile <path>");
+            return;
+        }
+        try {
+            Path path = Paths.get(rawPath.replace("\"", ""));
+            if (!Files.exists(path) || !Files.isRegularFile(path)) {
+                System.out.println("File not found: " + path);
+                return;
+            }
+            long size = Files.size(path);
+            if (size == 0) {
+                System.out.println("File is empty.");
+                return;
+            }
+            if (size > MAX_FILE_BYTES) {
+                System.out.println("File too large for demo transfer (max " + (MAX_FILE_BYTES / 1024) + " KB).");
+                return;
+            }
+            byte[] data = Files.readAllBytes(path);
+            boolean sent = node.sendFile(path.getFileName().toString(), data);
+            if (sent) {
+                System.out.println("Sent file '" + path.getFileName() + "' (" + size + " bytes) to room.");
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to send file: " + e.getMessage());
+        }
+    }
+
+    private static void toggleRobot() {
+        if (robotEnabled) {
+            stopRobot(false);
+            return;
+        }
+        if (node == null || !node.isRunning()) {
+            System.out.println("Robot requires an active connection. Join or reconnect first.");
+            return;
+        }
+        robotEnabled = true;
+        robotThread = new Thread(SimpleChatClient::runRobotLoop, "RobotChatThread");
+        robotThread.setDaemon(true);
+        robotThread.start();
+        System.out.println("Robot chat enabled. Type /robot again to stop.");
+    }
+
+    private static void runRobotLoop() {
+        Random random = new Random();
+        while (robotEnabled && running) {
+            try {
+                if (node == null || !node.isRunning()) {
+                    stopRobot(true);
+                    System.out.println("Robot paused because the node is disconnected.");
+                    break;
+                }
+                String base = ROBOT_MESSAGES[random.nextInt(ROBOT_MESSAGES.length)];
+                String message = "[Robot] " + base;
+                if (random.nextBoolean()) {
+                    message += " (#" + (100 + random.nextInt(900)) + ")";
+                }
+                node.sendChatMessage(message);
+                long delayWindow = ROBOT_MAX_DELAY_MS - ROBOT_MIN_DELAY_MS;
+                long delay = ROBOT_MIN_DELAY_MS + (delayWindow <= 0 ? 0 : random.nextInt((int) delayWindow));
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                System.err.println("Robot chat error: " + e.getMessage());
+            }
+        }
+    }
+
+    private static void stopRobot(boolean silent) {
+        if (!robotEnabled) {
+            return;
+        }
+        robotEnabled = false;
+        if (robotThread != null) {
+            robotThread.interrupt();
+            robotThread = null;
+        }
+        if (!silent) {
+            System.out.println("Robot chat disabled.");
+        }
     }
 }
