@@ -3,6 +3,7 @@ import java.awt.event.*;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.swing.*;
 import javax.swing.text.*;
 
@@ -10,7 +11,7 @@ import javax.swing.text.*;
  * Swing-based GUI for P2P Chat with old Skype-inspired dark theme.
  * Place a 'logo.png' file in the application directory to display a custom logo.
  */
-public class ChatGUI extends JFrame {
+public class ChatGUI extends JFrame implements MessageStatusListener {
 
     // ===== THEME COLORS (Old Skype inspired) =====
     private static final Color SKYPE_BLUE = new Color(0, 175, 240);
@@ -20,6 +21,7 @@ public class ChatGUI extends JFrame {
     private static final Color INPUT_BG = new Color(51, 51, 51);
     private static final Color TEXT_COLOR = Color.WHITE;
     private static final Color TEXT_MUTED = new Color(170, 170, 170);
+    private static final Color TEXT_PENDING = new Color(128, 128, 128);  // Grey for pending messages
     private static final long MAX_FILE_BYTES = 2 * 1024 * 1024;
 
     // ===== STATE =====
@@ -30,6 +32,10 @@ public class ChatGUI extends JFrame {
         "Hello.", "Robot status: still online.", "Anyone else love Lamport clocks?",
         "Latency feels nice from here.", "Robot message: 00111000010100101001"
     };
+    
+    // ===== PENDING MESSAGE TRACKING =====
+    // Maps messageId -> (start position, end position) in chat pane
+    private Map<UUID, int[]> pendingMessagePositions = new ConcurrentHashMap<>();
 
     // ===== UI COMPONENTS =====
     private JTextPane chatPane;
@@ -77,18 +83,24 @@ public class ChatGUI extends JFrame {
 
         // Nickname
         JLabel nickLabel = createLabel("Nickname:");
+        nickLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         JTextField nickField = createTextField("");
+        nickField.setAlignmentX(Component.CENTER_ALIGNMENT);
         nickField.setMaximumSize(new Dimension(300, 35));
 
         // IP
         String detectedIp = NetworkUtils.detectBestAddress();
         JLabel ipLabel = createLabel("Advertise IP:");
+        ipLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         JTextField ipField = createTextField(detectedIp);
+        ipField.setAlignmentX(Component.CENTER_ALIGNMENT);
         ipField.setMaximumSize(new Dimension(300, 35));
 
         // Port
         JLabel portLabel = createLabel("Port (1024-65535):");
+        portLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
         JTextField portField = createTextField("8080");
+        portField.setAlignmentX(Component.CENTER_ALIGNMENT);
         portField.setMaximumSize(new Dimension(300, 35));
 
         // Error label
@@ -126,6 +138,7 @@ public class ChatGUI extends JFrame {
 
             try {
                 node = new ChatNode(nickname, advertisedIp, port);
+                node.addMessageStatusListener(this);  // Register for delivery status updates
                 node.start();
                 setupDialog.dispose();
                 showMainWindow();
@@ -196,24 +209,37 @@ public class ChatGUI extends JFrame {
         sidebar.setPreferredSize(new Dimension(220, 0));
         sidebar.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // Logo
+        // Logo - wrap in panel for proper centering
         JLabel logo = createLogoLabel(48);
-        logo.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JPanel logoPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        logoPanel.setBackground(SIDEBAR_BG);
+        logoPanel.add(logo);
+        logoPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 60));
 
-        // Status
+        // Status - wrap in panel for proper centering
         statusLabel = new JLabel("Status: Connected");
         statusLabel.setForeground(TEXT_COLOR);
         statusLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        statusPanel.setBackground(SIDEBAR_BG);
+        statusPanel.add(statusLabel);
+        statusPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
 
         roomNameLabel = new JLabel("Room: " + node.getRoomName());
         roomNameLabel.setForeground(SKYPE_BLUE);
         roomNameLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        roomNameLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        JPanel roomPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        roomPanel.setBackground(SIDEBAR_BG);
+        roomPanel.add(roomNameLabel);
+        roomPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
 
         // Peers section
         JLabel peersLabel = createLabel("Online Peers");
         peersLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        JPanel peersLabelPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        peersLabelPanel.setBackground(SIDEBAR_BG);
+        peersLabelPanel.add(peersLabel);
+        peersLabelPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
 
         peerListModel = new DefaultListModel<>();
         peerList = new JList<>(peerListModel);
@@ -226,6 +252,10 @@ public class ChatGUI extends JFrame {
         // Rooms section
         JLabel roomsLabel = createLabel("Discovered Rooms");
         roomsLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        JPanel roomsLabelPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        roomsLabelPanel.setBackground(SIDEBAR_BG);
+        roomsLabelPanel.add(roomsLabel);
+        roomsLabelPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
 
         roomListModel = new DefaultListModel<>();
         roomList = new JList<>(roomListModel);
@@ -239,6 +269,10 @@ public class ChatGUI extends JFrame {
         JButton joinBtn = createButton("Join Room", true);
         joinBtn.setMaximumSize(new Dimension(200, 30));
         joinBtn.addActionListener(e -> joinSelectedRoom());
+
+        JButton newRoomBtn = createButton("New Room", true);
+        newRoomBtn.setMaximumSize(new Dimension(200, 30));
+        newRoomBtn.addActionListener(e -> createNewRoom());
 
         JButton refreshBtn = createButton("Refresh", false);
         refreshBtn.setMaximumSize(new Dimension(200, 30));
@@ -263,24 +297,30 @@ public class ChatGUI extends JFrame {
         disconnectBtn.setMaximumSize(new Dimension(200, 30));
         disconnectBtn.addActionListener(e -> disconnect());
 
+        JButton logoutBtn = createButton("Logout", false);
+        logoutBtn.setMaximumSize(new Dimension(200, 30));
+        logoutBtn.addActionListener(e -> logout());
+
         // Layout
-        sidebar.add(logo);
+        sidebar.add(logoPanel);
         sidebar.add(Box.createVerticalStrut(10));
-        sidebar.add(statusLabel);
+        sidebar.add(statusPanel);
         sidebar.add(Box.createVerticalStrut(5));
-        sidebar.add(roomNameLabel);
+        sidebar.add(roomPanel);
         sidebar.add(Box.createVerticalStrut(15));
         sidebar.add(new JSeparator());
         sidebar.add(Box.createVerticalStrut(10));
-        sidebar.add(peersLabel);
+        sidebar.add(peersLabelPanel);
         sidebar.add(Box.createVerticalStrut(5));
         sidebar.add(peerScroll);
         sidebar.add(Box.createVerticalStrut(15));
-        sidebar.add(roomsLabel);
+        sidebar.add(roomsLabelPanel);
         sidebar.add(Box.createVerticalStrut(5));
         sidebar.add(roomScroll);
         sidebar.add(Box.createVerticalStrut(10));
         sidebar.add(joinBtn);
+        sidebar.add(Box.createVerticalStrut(5));
+        sidebar.add(newRoomBtn);
         sidebar.add(Box.createVerticalStrut(5));
         sidebar.add(refreshBtn);
         sidebar.add(Box.createVerticalGlue());
@@ -291,6 +331,8 @@ public class ChatGUI extends JFrame {
         sidebar.add(robotBtn);
         sidebar.add(Box.createVerticalStrut(5));
         sidebar.add(disconnectBtn);
+        sidebar.add(Box.createVerticalStrut(5));
+        sidebar.add(logoutBtn);
 
         return sidebar;
     }
@@ -353,9 +395,56 @@ public class ChatGUI extends JFrame {
             handleCommand(text);
         } else {
             if (node != null && node.isRunning()) {
-                node.sendChatMessage(text);
+                UUID messageId = node.sendChatMessage(text);
+                if (messageId != null) {
+                    // Display own message - grey if pending, white if immediately delivered
+                    String msgText = "[" + node.getClock() + "] " + nickname + ": " + text;
+                    if (node.isMessagePending(messageId)) {
+                        appendChatPending(msgText, messageId);
+                    } else {
+                        appendChat(msgText, TEXT_COLOR);
+                    }
+                }
             } else {
                 appendChat("[System] Not connected to network.", TEXT_MUTED);
+            }
+        }
+    }
+    
+    /**
+     * Append a pending message (grey) and track its position for later update
+     */
+    private void appendChatPending(String text, UUID messageId) {
+        SwingUtilities.invokeLater(() -> {
+            StyledDocument doc = chatPane.getStyledDocument();
+            SimpleAttributeSet attrs = new SimpleAttributeSet();
+            StyleConstants.setForeground(attrs, TEXT_PENDING);
+            try {
+                int startPos = doc.getLength();
+                doc.insertString(doc.getLength(), text + "\n", attrs);
+                int endPos = doc.getLength();
+                pendingMessagePositions.put(messageId, new int[]{startPos, endPos});
+                chatPane.setCaretPosition(doc.getLength());
+            } catch (BadLocationException e) {
+                // Ignore
+            }
+        });
+    }
+    
+    /**
+     * MessageStatusListener implementation - update message color when delivered
+     */
+    @Override
+    public void onMessageStatusChanged(UUID messageId, boolean delivered) {
+        if (delivered) {
+            int[] positions = pendingMessagePositions.remove(messageId);
+            if (positions != null) {
+                SwingUtilities.invokeLater(() -> {
+                    StyledDocument doc = chatPane.getStyledDocument();
+                    SimpleAttributeSet attrs = new SimpleAttributeSet();
+                    StyleConstants.setForeground(attrs, TEXT_COLOR);
+                    doc.setCharacterAttributes(positions[0], positions[1] - positions[0], attrs, false);
+                });
             }
         }
     }
@@ -381,9 +470,11 @@ public class ChatGUI extends JFrame {
                 appendChat("[System] Room list refreshed.", TEXT_MUTED);
             }
             case "/resync" -> resyncHistory();
+            case "/newroom" -> createNewRoom();
             case "/clear" -> chatPane.setText("");
             case "/robot" -> toggleRobot();
             case "/disconnect" -> disconnect();
+            case "/logout" -> logout();
             case "/help" -> showHelp();
             case "/quit" -> {
                 shutdown();
@@ -400,9 +491,11 @@ public class ChatGUI extends JFrame {
         appendChat("/status - Show node status", TEXT_MUTED);
         appendChat("/rooms - Refresh room list", TEXT_MUTED);
         appendChat("/resync - Rebuild chat history", TEXT_MUTED);
+        appendChat("/newroom - Create a new room as seed node", TEXT_MUTED);
         appendChat("/clear - Clear chat display", TEXT_MUTED);
         appendChat("/robot - Toggle robot chat", TEXT_MUTED);
         appendChat("/disconnect - Disconnect", TEXT_MUTED);
+        appendChat("/logout - Logout and change name/IP/port", TEXT_MUTED);
         appendChat("/help - Show this help", TEXT_MUTED);
         appendChat("/quit - Exit application", TEXT_MUTED);
     }
@@ -480,6 +573,74 @@ public class ChatGUI extends JFrame {
         }
     }
 
+    private void createNewRoom() {
+        if (node == null) {
+            appendChat("[System] Node not initialized.", TEXT_MUTED);
+            return;
+        }
+
+        // Ask for room name
+        String roomName = JOptionPane.showInputDialog(this,
+            "Enter name for your new room:",
+            "Create New Room",
+            JOptionPane.PLAIN_MESSAGE);
+
+        if (roomName == null || roomName.trim().isEmpty()) {
+            appendChat("[System] Room creation cancelled.", TEXT_MUTED);
+            return;
+        }
+
+        // If connected, disconnect first
+        if (node.isRunning() && !node.getAllPeers().isEmpty()) {
+            stopRobot();
+            node.prepareForJoin(); // This disconnects and clears state
+        }
+
+        // Set room name and become seed/key node
+        node.setRoomName(roomName.trim());
+        node.ensureSeedKey();
+
+        // Update UI
+        roomNameLabel.setText("Room: " + roomName.trim());
+        statusLabel.setText("Status: Connected (Seed)");
+        refreshPeerList();
+        refreshRoomList();
+
+        appendChat("[System] Created new room: " + roomName.trim(), SKYPE_BLUE);
+        appendChat("[System] You are the seed node. Others can join at: " + advertisedIp + ":" + port, SKYPE_BLUE);
+    }
+
+    private void logout() {
+        int confirm = JOptionPane.showConfirmDialog(this,
+            "Logout and change your identity?\n\nThis will disconnect you and let you choose a new name, IP, and port.",
+            "Logout",
+            JOptionPane.YES_NO_OPTION);
+
+        if (confirm != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        // Stop everything
+        stopRobot();
+        if (node != null) {
+            node.removeMessageStatusListener(this);
+            node.stop();
+            node = null;
+        }
+
+        // Hide main window
+        setVisible(false);
+        dispose();
+
+        // Clear chat and pending messages
+        if (chatPane != null) {
+            chatPane.setText("");
+        }
+        pendingMessagePositions.clear();
+
+        // Show setup dialog again
+        showSetupDialog();
+    }
     private void resyncHistory() {
         if (node != null && node.isRunning()) {
             boolean success = node.rebuildChatHistory();

@@ -2,6 +2,7 @@ import java.io.Serializable;
 
 public enum MessageType implements Serializable {
     CHAT_MESSAGE,       // Regular chat message
+    MESSAGE_ACK,        // Acknowledgment of received chat message
     PEER_DISCOVERY,     // Announcing presence to network
     PEER_LIST,          // Sharing known peers
     PEER_LIST_REQUEST,  // Requesting an updated peer list

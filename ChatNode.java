@@ -41,6 +41,10 @@ public class ChatNode {
     private volatile boolean outboundMutedForSync;
     private volatile long highestHistoryTimestamp;
     
+    // Pending message tracking for delivery status
+    private Set<UUID> pendingMessages;  // Messages awaiting ACK
+    private List<MessageStatusListener> messageStatusListeners;
+    
     // Network components
     private UDPHandler udpHandler;
     private FragmentAssembler fragmentAssembler;
@@ -80,6 +84,8 @@ public class ChatNode {
         this.historySyncInProgress = false;
         this.outboundMutedForSync = false;
         this.highestHistoryTimestamp = 0L;
+        this.pendingMessages = ConcurrentHashMap.newKeySet();
+        this.messageStatusListeners = new ArrayList<>();
         
         this.fragmentAssembler = new FragmentAssembler();
         this.running = false;
@@ -487,14 +493,25 @@ public class ChatNode {
     
     /**
      * Send a chat message to the network
+     * @return The message ID for tracking delivery status, or null if sending was blocked
      */
-    public void sendChatMessage(String content) {
+    public UUID sendChatMessage(String content) {
         if (outboundMutedForSync) {
             System.out.println("History sync in progress. Please wait until it completes before sending messages.");
-            return;
+            return null;
         }
         long timestamp = incrementClock();
         ChatMessage message = new ChatMessage(nodeId, nickname, content, timestamp);
+        UUID messageId = message.getMessageId();
+        
+        // Track as pending if we have peers to send to
+        int peerCount = swarmPeers.size() + (isSwarmKey ? keyNodePeers.size() : 0);
+        if (peerCount > 0) {
+            pendingMessages.add(messageId);
+        } else {
+            // No peers - immediately mark as delivered (or "sent to self")
+            notifyMessageDelivered(messageId);
+        }
         
         // Store locally first
         addMessage(message);
@@ -514,6 +531,42 @@ public class ChatNode {
         // If we're a key node, also send to other key nodes
         if (isSwarmKey) {
             broadcastToKeyNodes(packet);
+        }
+        
+        return messageId;
+    }
+    
+    /**
+     * Add a listener for message delivery status updates
+     */
+    public void addMessageStatusListener(MessageStatusListener listener) {
+        messageStatusListeners.add(listener);
+    }
+    
+    /**
+     * Remove a message delivery status listener
+     */
+    public void removeMessageStatusListener(MessageStatusListener listener) {
+        messageStatusListeners.remove(listener);
+    }
+    
+    /**
+     * Check if a message is still pending delivery confirmation
+     */
+    public boolean isMessagePending(UUID messageId) {
+        return pendingMessages.contains(messageId);
+    }
+    
+    /**
+     * Notify listeners that a message has been delivered
+     */
+    private void notifyMessageDelivered(UUID messageId) {
+        for (MessageStatusListener listener : messageStatusListeners) {
+            try {
+                listener.onMessageStatusChanged(messageId, true);
+            } catch (Exception e) {
+                // Ignore listener exceptions
+            }
         }
     }
     
@@ -538,7 +591,8 @@ public class ChatNode {
             
             // Handle based on type
             switch (completePacket.getType()) {
-                case CHAT_MESSAGE -> handleChatMessage(completePacket);
+                case CHAT_MESSAGE -> handleChatMessage(completePacket, senderAddress, senderPort);
+                case MESSAGE_ACK -> handleMessageAck(completePacket);
                 case HISTORY_SNAPSHOT -> handleHistorySnapshot(completePacket);
                 case JOIN_REQUEST -> handleJoinRequest(completePacket, senderAddress, senderPort);
                 case PEER_DISCOVERY -> handlePeerDiscovery(completePacket);
@@ -561,8 +615,37 @@ public class ChatNode {
     
     // ===== PACKET HANDLERS =====
     
-    private void handleChatMessage(NetworkPacket packet) {
+    private void handleChatMessage(NetworkPacket packet, String senderAddress, int senderPort) {
         processIncomingChat(packet, true);
+        
+        // Send ACK back to the original sender
+        ChatMessage message = (ChatMessage) packet.getPayload();
+        if (message != null) {
+            sendMessageAck(message.getMessageId(), senderAddress, senderPort);
+        }
+    }
+    
+    private void handleMessageAck(NetworkPacket packet) {
+        UUID messageId = (UUID) packet.getPayload();
+        if (messageId != null && pendingMessages.remove(messageId)) {
+            // Message was confirmed delivered by at least one peer
+            notifyMessageDelivered(messageId);
+        }
+    }
+    
+    private void sendMessageAck(UUID messageId, String targetAddress, int targetPort) {
+        try {
+            NetworkPacket ackPacket = new NetworkPacket(
+                MessageType.MESSAGE_ACK,
+                nodeId,
+                nickname,
+                getClock(),  // Don't increment clock for ACKs
+                messageId
+            );
+            udpHandler.sendWithFragmentation(ackPacket, targetAddress, targetPort);
+        } catch (Exception e) {
+            // ACK failed - not critical
+        }
     }
 
     private void processIncomingChat(NetworkPacket packet, boolean shouldForward) {

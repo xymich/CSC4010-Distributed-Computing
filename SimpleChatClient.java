@@ -5,10 +5,13 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Map;
 import java.util.Random;
 import java.util.Scanner;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class SimpleChatClient {
+public class SimpleChatClient implements MessageStatusListener {
     
     private static ChatNode node;
     private static Scanner scanner;
@@ -27,6 +30,24 @@ public class SimpleChatClient {
     private static final long ROBOT_MIN_DELAY_MS = 2000;
     private static final long ROBOT_MAX_DELAY_MS = 6000;
     
+    // Pending message tracking for CLI
+    private static Map<UUID, String> pendingMessages = new ConcurrentHashMap<>();
+    private static SimpleChatClient instance = new SimpleChatClient();
+    
+    /**
+     * MessageStatusListener implementation - update pending message status
+     */
+    @Override
+    public void onMessageStatusChanged(UUID messageId, boolean delivered) {
+        if (delivered) {
+            String pendingText = pendingMessages.remove(messageId);
+            if (pendingText != null) {
+                // Message delivered - re-print without "..." prefix
+                System.out.println("\r" + pendingText);
+            }
+        }
+    }
+    
     public static void main(String[] args) {
         scanner = new Scanner(System.in);
         
@@ -43,6 +64,7 @@ public class SimpleChatClient {
             // Create node with error handling
             try {
                 node = new ChatNode(nickname, advertisedIp, port);
+                node.addMessageStatusListener(instance);  // Register for delivery status updates
                 node.start();
                 break; // Success! Exit the retry loop
             } catch (Exception e) {
@@ -321,6 +343,7 @@ public class SimpleChatClient {
         System.out.println("/status         - Show node status");
         System.out.println("/rooms          - List available chat rooms on network");
         System.out.println("/join <number>  - Join a discovered room by number");
+        System.out.println("/newroom        - Create a new room as seed node");
         System.out.println("/disconnect     - Disconnect from current network");
         System.out.println("/reconnect      - Reconnect to a network");
         System.out.println("/roomname <name> - Rename your room");
@@ -358,7 +381,18 @@ public class SimpleChatClient {
                 } else {
                     // Send as chat message
                     if (node != null && node.isRunning()) {
-                        node.sendChatMessage(input);
+                        UUID messageId = node.sendChatMessage(input);
+                        if (messageId != null) {
+                            String displayText = "[" + node.getClock() + "] " + node.getNickname() + ": " + input;
+                            if (node.isMessagePending(messageId)) {
+                                // Show pending indicator
+                                pendingMessages.put(messageId, displayText);
+                                System.out.println("... " + displayText);
+                            } else {
+                                // Immediately delivered (no peers or self-only)
+                                System.out.println(displayText);
+                            }
+                        }
                     } else {
                         System.out.println("Error: Not connected to network. Use /reconnect to join.");
                     }
@@ -414,6 +448,9 @@ public class SimpleChatClient {
                 } else {
                     System.out.println("Usage: /roomname <new name>");
                 }
+                break;
+            case "/newroom":
+                createNewRoom();
                 break;
             case "/resync":
                 rebuildHistory();
@@ -563,6 +600,44 @@ public class SimpleChatClient {
         } else {
             System.out.println("Disconnect cancelled.");
         }
+    }
+
+    private static void createNewRoom() {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+
+        System.out.print("Enter name for your new room: ");
+        String roomName = scanner.nextLine().trim();
+
+        if (roomName.isEmpty()) {
+            System.out.println("Room creation cancelled.");
+            return;
+        }
+
+        // If connected, disconnect first
+        if (node.isRunning() && !node.getAllPeers().isEmpty()) {
+            stopRobot(false);
+            node.prepareForJoin(); // This disconnects and clears state
+        }
+
+        // Restart node if stopped
+        if (!node.isRunning()) {
+            try {
+                node.start();
+            } catch (Exception e) {
+                System.err.println("Failed to start node: " + e.getMessage());
+                return;
+            }
+        }
+
+        // Set room name and become seed/key node
+        node.setRoomName(roomName);
+        node.ensureSeedKey();
+
+        System.out.println("\nCreated new room: " + roomName);
+        System.out.println("You are the seed node. Others can join at: " + advertisedIp + ":" + node.getPort());
     }
     
     private static void reconnect() {
@@ -806,6 +881,7 @@ public class SimpleChatClient {
                 if (random.nextBoolean()) {
                     message += " (#" + (100 + random.nextInt(900)) + ")";
                 }
+                // Robot messages - don't track pending status
                 node.sendChatMessage(message);
                 long delayWindow = ROBOT_MAX_DELAY_MS - ROBOT_MIN_DELAY_MS;
                 long delay = ROBOT_MIN_DELAY_MS + (delayWindow <= 0 ? 0 : random.nextInt((int) delayWindow));
