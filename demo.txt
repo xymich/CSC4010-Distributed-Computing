@@ -1,0 +1,1154 @@
+================================================================================
+                    P2P DISTRIBUTED CHAT SYSTEM - DEMO TEST PLAN
+================================================================================
+
+PREREQUISITES:
+- Compile all files: javac *.java
+- Have 3 terminals/machines ready (for multi-node tests)
+- Prepare a small test file (e.g., test.txt with some content) for file transfer
+- Note: GUI mode (option 1) or CLI mode (option 2) both work for all tests
+
+================================================================================
+REQUIREMENT COVERAGE CHECKLIST
+================================================================================
+
+[✓] = Fully Implemented
+[~] = Partially Implemented  
+[?] = Needs Verification
+[ ] = Not Implemented
+
+BASIC REQUIREMENTS:
+[✓] Enable connection of at least two chat nodes
+[✓] Allow for sending of messages
+[✓] Allocate nodes a "friendly" nickname
+[✓] Uniquely identify all nodes on the network (UUID)
+[✓] Show same set of messages on each node
+[✓] Use UDP as primary data communication protocol
+[✓] Gracefully handle disconnecting nodes (heartbeat timeout)
+
+INTERMEDIATE REQUIREMENTS:
+[✓] Enable multiple synchronised chat nodes (3+)
+[✓] Enable new nodes to join the chat network
+[✓] Uniquely identify all data items (UUID per message)
+[✓] Ensure complete accurate ordering (Lamport clocks)
+[✓] New node receives all current chat data (history sync)
+[✓] Automated "robot" chat option (/robot command)
+[✓] Handle malformed data gracefully (try-catch on deserialize)
+[✓] True peer-to-peer network (swarm/key node architecture)
+[✓] Simulate failure - unreliable network (/netloss command)
+
+ADVANCED REQUIREMENTS:
+[✓] Support discovery of nodes from other nodes (/peers, peer list exchange)
+[✓] Support discovery of chat networks (UDP broadcast discovery 6000-6099)
+[✓] Mechanism to discover and obtain missing data (/resync command)
+[✓] Transfer binary files (/sendfile - P2P via UDP)
+[✓] Clear local copy and rebuild from network (/resync clears and rebuilds)
+[✓] Re-draw chat data from local data in order (/messages command)
+[✓] External interface (GUI - Swing-based graphical interface separate from CLI)
+
+ADDITIONAL MARKS:
+[✓] Design quality - swarm-based architecture with key nodes
+[✓] Wow factor - chat rooms, room renaming, message delivery status
+
+================================================================================
+DEMO TEST SEQUENCE
+================================================================================
+
+NOTE: Run each section in order. Times are approximate.
+
+--------------------------------------------------------------------------------
+TEST 1: BASIC TWO-NODE CONNECTION (3 minutes)
+Demonstrates: Connection, messaging, nicknames, UDP, unique IDs
+--------------------------------------------------------------------------------
+
+SETUP:
+  Terminal 1: java ChatLauncher
+    - Choose: 1 (GUI) or 2 (CLI)
+    - Nickname: Michael
+    - Port: 1111
+    - Join network? N (start as seed)
+
+  Terminal 2: java ChatLauncher
+    - Choose: 1 (GUI) or 2 (CLI)  
+    - Nickname: Joshy
+    - Port: 2222
+    - Join network? Y
+    - Select room 1 (Michael's room)
+
+DEMO ACTIONS:
+  1. Michael: Send "Hello Joshy!"
+  2. Joshy: Verify message appears with [timestamp] Michael: Hello Joshy!
+  3. Joshy: Send "Hi Michael!"
+  4. Michael: Verify message appears
+  5. Both: Type /status - show unique node UUIDs
+  6. Both: Type /peers - show peer list with nicknames
+
+TALKING POINTS:
+  - Friendly nicknames displayed (not UUIDs)
+  - Each node has unique UUID (shown in /status)
+  - Messages have Lamport timestamps for ordering
+  - UDP is the transport (no TCP connections)
+
+--------------------------------------------------------------------------------
+TEST 2: THREE+ NODE SYNCHRONIZATION (4 minutes)
+Demonstrates: Multiple nodes, history sync on join
+--------------------------------------------------------------------------------
+
+CONTINUING FROM TEST 1...
+
+  Terminal 3: java ChatLauncher
+    - Nickname: Charlie
+    - Port: 3333
+    - Join network? Y
+    - Select Michael's room
+
+DEMO ACTIONS:
+  1. Charlie: Verify ALL previous messages appear immediately
+     (Shows "Applied history snapshot (X new messages)")
+  2. Charlie: Send "I'm Charlie, I can see the history!"
+  3. All three: Verify message appears on all nodes
+  4. Type /messages on any node - shows ordered history
+
+TALKING POINTS:
+  - New nodes automatically receive full chat history
+  - Lamport clocks ensure consistent ordering across all nodes
+  - Messages have unique UUIDs (prevents duplicates)
+
+--------------------------------------------------------------------------------
+TEST 3: GRACEFUL DISCONNECT HANDLING (3 minutes)
+Demonstrates: Heartbeat timeout, graceful exit
+--------------------------------------------------------------------------------
+
+CONTINUING FROM TEST 2...
+
+DEMO ACTIONS:
+  1. Charlie: Type /disconnect (graceful exit)
+  2. Michael & Joshy: See "Peer leaving: Charlie" immediately
+  3. Michael: Send a message
+  4. Joshy: Verify it still works (network continues)
+  
+  FORCE QUIT TEST:
+  5. Start Charlie again, join the room
+  6. FORCE CLOSE Charlie's terminal (Ctrl+C or close window)
+  7. Wait ~30 seconds
+  8. Michael & Joshy: See "Peer timed out (no heartbeat): Charlie"
+
+TALKING POINTS:
+  - Graceful disconnect notifies peers immediately
+  - Unexpected disconnect detected via timeout (30 sec)
+  - Network continues operating without the disconnected node
+  - No data corruption or errors
+
+--------------------------------------------------------------------------------
+TEST 4: ROBOT AUTOMATED CHAT (2 minutes)
+Demonstrates: Automated message generation
+--------------------------------------------------------------------------------
+
+DEMO ACTIONS:
+  1. Michael: Type /robot (enable robot)
+  2. Wait 5-10 seconds - automated messages appear
+     "[Robot] Hello.", "[Robot] Anyone else love Lamport clocks?", etc.
+  3. Joshy: Verify robot messages appear
+  4. Michael: Type /robot (disable robot)
+
+TALKING POINTS:
+  - Robot generates random chat messages automatically
+  - Useful for testing network load and message ordering
+  - Messages propagate to all peers like normal chat
+
+--------------------------------------------------------------------------------
+TEST 5: NETWORK FAILURE SIMULATION (4 minutes)
+Demonstrates: Unreliable network links, packet loss handling
+--------------------------------------------------------------------------------
+
+DEMO ACTIONS:
+  1. Michael: Type /netloss 50 (50% packet loss)
+  2. Michael: Send several messages quickly
+  3. Observe: Some show "[Simulated] Dropped outbound packet"
+  4. Joshy: Some messages may be delayed or missing initially
+  
+  5. Michael: Type /netloss 95 (extreme loss)
+  6. Try sending messages - most will be dropped
+  7. Eventually peer timeout may occur
+  
+  8. Michael: Type /netloss 0 (disable simulation)
+  9. Network recovers, messages flow normally
+
+  GUI SPECIFIC:
+  - Messages start GREY (pending)
+  - Turn WHITE when delivery confirmed
+  - Stay grey if not confirmed
+
+  CLI SPECIFIC:
+  - Messages show [UNCONFIRMED] if no ACK received within 3 seconds
+
+TALKING POINTS:
+  - Simulates real-world unreliable networks
+  - System handles packet loss gracefully
+  - Delivery confirmation via ACK mechanism
+  - Heartbeat mechanism detects unresponsive peers
+
+--------------------------------------------------------------------------------
+TEST 6: PEER AND NETWORK DISCOVERY (3 minutes)
+Demonstrates: Node discovery, network/room discovery
+--------------------------------------------------------------------------------
+
+SETUP: Start fresh with all nodes disconnected
+
+  Terminal 1: java ChatLauncher
+    - Nickname: Node1, Port: 1111
+    - Join? N (seed node)
+    - Type /roomname TestRoom
+
+  Terminal 2: java ChatLauncher
+    - Nickname: Node2, Port: 2222
+    - Join? Y
+    - OBSERVE: Room list shows "TestRoom" automatically discovered!
+    - Join the room
+
+DEMO ACTIONS:
+  1. Node2: Type /rooms - shows discovered rooms via UDP broadcast
+  2. Node2: Type /peers - shows Node1 discovered
+  3. Start Node3 (port 3333), join network
+  4. Node3: /peers shows both Node1 and Node2
+     (peer discovery from other peers)
+
+MANUAL SEED TEST (for non-broadcast networks):
+  5. Node3: Type /seed <Node1-IP> 1111
+  6. Shows how to manually add discovery targets
+
+TALKING POINTS:
+  - Automatic discovery via UDP broadcast (ports 6000-6099)
+  - Peer lists exchanged between nodes (peer discovery from peers)
+  - /seed command for manual discovery on restrictive networks
+  - No central server needed for discovery
+
+--------------------------------------------------------------------------------
+TEST 7: HISTORY REBUILD / RESYNC (3 minutes)
+Demonstrates: Clear local data, rebuild from network
+--------------------------------------------------------------------------------
+
+CONTINUING WITH CONNECTED NODES...
+
+DEMO ACTIONS:
+  1. All nodes: Send a few messages to build history
+  2. Node2: Type /messages - show current history
+  3. Node2: Type /resync
+  4. Observe: "Requesting chat history sync from peers..."
+  5. Observe: "Applied history snapshot (X new messages)"
+  6. Node2: Type /messages - history rebuilt from network
+
+  ALSO DEMONSTRATE:
+  7. Type /clear (clears display only)
+  8. Type /messages (re-displays from local storage)
+
+TALKING POINTS:
+  - /resync clears local history and fetches from peers
+  - Simulates recovering from data corruption
+  - /clear + /messages shows redraw from local data
+  - Messages remain ordered correctly after rebuild
+
+--------------------------------------------------------------------------------
+TEST 8: BINARY FILE TRANSFER (3 minutes)
+Demonstrates: P2P file transfer via UDP
+--------------------------------------------------------------------------------
+
+PREPARATION: Create test.txt with content "Hello this is a test file!"
+
+DEMO ACTIONS (CLI):
+  1. Node1: /sendfile test.txt
+  2. Observe: "Broadcasting file 'test.txt' to swarm peers..."
+  3. Node2: See "[FILE RECEIVED] test.txt from Node1 (XX bytes)"
+  4. Node2: Check current directory - file saved as test.txt
+
+DEMO ACTIONS (GUI):
+  1. Click "Send File" button
+  2. Select file in dialog
+  3. Other nodes receive the file
+
+TALKING POINTS:
+  - Files transferred as P2P data (not client/server)
+  - Uses same UDP infrastructure as chat messages
+  - Files fragmented if larger than packet size
+  - Unique file IDs prevent duplicate processing
+
+--------------------------------------------------------------------------------
+TEST 9: CHAT ROOMS (3 minutes) - WOW FACTOR
+Demonstrates: Multiple chat rooms, room isolation
+--------------------------------------------------------------------------------
+
+SETUP:
+  Terminal 1 (Michael): Start as seed, room name "Lobby"
+  Terminal 2 (Joshy): Join Michael's room
+
+DEMO ACTIONS:
+  1. Send messages in Lobby
+  2. Joshy: /disconnect, then /newroom
+  3. Name new room: "Private"
+  4. Joshy is now in separate room
+  
+  5. Terminal 3 (Charlie): Start and /rooms
+  6. See BOTH rooms listed: "Lobby" and "Private"
+  7. Charlie: Join "Private" room
+  8. Charlie & Joshy: Exchange messages
+  9. Michael: Does NOT see these messages (room isolation)
+
+TALKING POINTS:
+  - Multiple independent chat rooms on same network
+  - Room discovery shows all available rooms
+  - Messages isolated per room (room partitioning)
+  - More scalable than full-mesh: O(N/R) vs O(N) per broadcast
+
+--------------------------------------------------------------------------------
+TEST 10: KEY NODE FAILOVER (3 minutes) - WOW FACTOR
+Demonstrates: True P2P, no single point of failure
+--------------------------------------------------------------------------------
+
+DEMO ACTIONS:
+  1. Check /peers - identify who has [KEY] marker
+  2. If Michael is KEY: force close Michael's terminal
+  3. Wait for timeout
+  4. Joshy & Charlie: See "Key node left, finding replacement..."
+  5. One of them: "Becoming swarm key node"
+  6. Network continues operating!
+  7. New key node now handles room discovery broadcast
+
+TALKING POINTS:
+  - Leader-elected P2P: key node chosen by join time (oldest = key)
+  - Automatic failover when key node leaves
+  - No central server - any node can become key (role, not special hardware)
+  - True peer-to-peer resilience - leadership is temporary, not permanent
+
+--------------------------------------------------------------------------------
+TEST 11: MALFORMED DATA HANDLING (1 minute)
+Demonstrates: Graceful handling of bad packets
+--------------------------------------------------------------------------------
+
+This is handled internally - demonstrate by:
+  1. Point out code in UDPHandler.handleReceivedPacket()
+  2. Shows try-catch around deserialize
+  3. Bad packets logged and ignored, no crash
+
+TALKING POINTS:
+  - Malformed packets caught at deserialization
+  - Error logged but doesn't crash the node
+  - Network continues operating normally
+
+================================================================================
+QUICK COMMAND REFERENCE
+================================================================================
+
+MESSAGING:
+  Just type and press Enter     - Send chat message
+
+INFORMATION:
+  /status                       - Show node info and Lamport clock
+  /peers                        - List connected peers
+  /messages                     - Display message history
+  /rooms                        - List discovered chat rooms
+
+ROOM MANAGEMENT:
+  /join <number>                - Join a discovered room
+  /newroom                      - Create a new room
+  /roomname <name>              - Rename current room (key node only)
+
+NETWORK:
+  /disconnect                   - Disconnect from network
+  /reconnect                    - Reconnect to network
+  /seed <ip> <port>             - Add manual discovery target
+  /seeds                        - Show discovery targets
+
+TESTING:
+  /robot                        - Toggle automated chat
+  /netloss <0-100>              - Simulate packet loss percentage
+  /resync                       - Rebuild history from peers
+  /sendfile <path>              - Send file to room (CLI)
+  /clear                        - Clear chat display
+
+OTHER:
+  /help                         - Show commands
+  /logout                       - Change identity (GUI)
+  /quit                         - Exit application
+
+================================================================================
+ARCHITECTURE SUMMARY (for design discussion)
+================================================================================
+
+1. LEADER-ELECTED ROOM-BASED P2P (not "swarm" in BitTorrent sense)
+   
+   What it IS:
+   - Nodes grouped into "rooms" (chat channels)
+   - Each room has one elected "key node" (leader) - the oldest member
+   - Key node handles: room discovery broadcast, history provision to joiners
+   - Leadership is a ROLE, not special hardware - any node can become key
+   - Automatic leader election on key node failure
+   
+   What it is NOT:
+   - Not a BitTorrent-style swarm (no content chunks, no tracker)
+   - Not pure flat P2P (has temporary leadership for efficiency)
+   - Not client-server (leader failure = election, not total failure)
+   
+   Similar to: IRC channels, Discord servers, Pub/Sub topics
+
+2. SCALABILITY vs FULL-MESH P2P
+   
+   Full-Mesh (naive P2P):        Your Architecture:
+   ┌───────────────────┐        ┌─────────────────────────────┐
+   │  A ←→ B ←→ C ←→ D │        │ Room1: A←→B←→C  Room2: D←→E │
+   │  ↑     ╲   ╱     ↑ │        │        [KEY]          [KEY]  │
+   │  └──────╲─╱──────┘ │        │          ↓              ↓    │
+   │    All connected   │        │    Only keys broadcast discovery
+   └───────────────────┘        └─────────────────────────────┘
+   
+   Connections:  O(N²)           Connections:  O(N²/R) per room
+   Broadcast:    O(N)            Broadcast:    O(N/R) per room
+   Discovery:    All nodes       Discovery:    Only key nodes
+   
+   With 100 nodes:
+   - Full mesh: 4,950 connections, 99 msgs per broadcast
+   - 4 rooms of 25: ~1,200 connections, 24 msgs per broadcast
+   
+   YOUR DESIGN IS MORE SCALABLE because:
+   - Room partitioning limits broadcast scope
+   - Only key nodes do expensive discovery broadcast
+   - Messages don't flood globally (room isolation)
+
+3. LAMPORT CLOCKS
+   - Every message tagged with logical timestamp
+   - Ensures consistent ordering across all nodes
+   - Clock incremented on send, updated on receive (max + 1 rule)
+   - Ties broken by node UUID for deterministic total ordering
+
+4. MESSAGE IDENTIFICATION
+   - Each message has UUID (globally unique)
+   - Each node has UUID (generated locally, no coordination)
+   - Prevents duplicates even with network retries or history re-sync
+
+5. UDP PROTOCOL
+   - All communication via UDP datagrams (connectionless)
+   - Fragmentation for large payloads (>7KB threshold)
+   - ACK mechanism for delivery confirmation (grey→white in GUI)
+   - Heartbeat for liveness detection (10s interval, 30s timeout)
+
+6. DISCOVERY
+   - Room discovery: UDP broadcast on ports 6000-6099 (by key nodes only)
+   - Peer discovery: Peer list exchange on join and via heartbeats
+   - Manual seed: /seed command for restrictive networks blocking broadcast
+
+================================================================================
+DETAILED IMPLEMENTATION NOTES (for Q&A preparation)
+================================================================================
+
+These notes explain HOW each feature works in the code. Use these to answer
+questions like "How did you implement X?" or "Walk me through how Y works."
+
+--------------------------------------------------------------------------------
+TOPIC 1: NODE IDENTIFICATION & NICKNAMES
+--------------------------------------------------------------------------------
+
+FILES: ChatNode.java, PeerInfo.java
+
+HOW IT WORKS:
+  - Each node generates a UUID on creation: this.nodeId = UUID.randomUUID()
+  - UUID is a 128-bit universally unique identifier (virtually impossible to duplicate)
+  - The nickname is user-provided and stored separately
+  - PeerInfo object bundles: nodeId, nickname, ipAddress, port, swarmId, isKeyNode, joinTime
+
+WHY UUID?
+  - UUIDs are generated locally without coordination (no central server needed)
+  - Statistically guaranteed unique across all nodes worldwide
+  - Alternative would be IP:port but that's not unique if nodes restart
+
+CODE FLOW:
+  1. User enters nickname at startup
+  2. ChatNode constructor: this.nodeId = UUID.randomUUID()
+  3. When sending messages, both nodeId and nickname are included
+  4. Receivers display nickname but use nodeId for deduplication
+
+POTENTIAL QUESTIONS:
+  Q: "Why not just use the nickname as the identifier?"
+  A: Nicknames aren't unique - two users could both be "Alice". UUID guarantees
+     uniqueness for message deduplication and peer tracking.
+
+  Q: "How do you ensure UUIDs don't collide?"
+  A: UUID v4 uses 122 random bits. Probability of collision is ~1 in 2^61.
+     For practical purposes, collisions are impossible.
+
+--------------------------------------------------------------------------------
+TOPIC 2: LAMPORT CLOCKS & MESSAGE ORDERING
+--------------------------------------------------------------------------------
+
+FILES: ChatNode.java (lamportClock field), ChatMessage.java
+
+HOW IT WORKS:
+  - Each node maintains: private AtomicLong lamportClock = new AtomicLong(0)
+  - AtomicLong ensures thread-safe increment operations
+  
+  RULES (Lamport's algorithm):
+  1. Before SENDING: increment clock, attach to message
+     long timestamp = incrementClock();  // clock++ then return
+     
+  2. On RECEIVING: update clock to max(local, received) + 1
+     public void updateClock(long receivedTimestamp) {
+         lamportClock.updateAndGet(current -> Math.max(current, receivedTimestamp) + 1);
+     }
+
+  3. Messages sorted by timestamp, ties broken by nodeId
+
+WHY LAMPORT CLOCKS?
+  - Physical clocks can't be synchronized perfectly in distributed systems
+  - Lamport clocks provide "happened-before" ordering guarantee
+  - If A sends to B, then A's timestamp < B's response timestamp (causal order)
+
+DISPLAY:
+  - Messages shown as: [42] Alice: Hello  (42 is Lamport timestamp)
+  - All nodes see same ordering because they use same logical clock rules
+
+POTENTIAL QUESTIONS:
+  Q: "Why not use wall-clock time?"
+  A: Computer clocks drift and can't be perfectly synchronized. Node A's clock
+     might say 10:00:01 while Node B says 10:00:03 for the same moment.
+     Lamport clocks give logical ordering without relying on physical time.
+
+  Q: "What if two messages have the same Lamport timestamp?"
+  A: We break ties using nodeId (UUID comparison). This ensures deterministic
+     ordering even for concurrent messages.
+
+  Q: "Does this guarantee causal ordering?"
+  A: Yes! If message A causally precedes B (A happened before B), then
+     timestamp(A) < timestamp(B). But the reverse isn't always true -
+     same timestamps just mean the events are concurrent.
+
+--------------------------------------------------------------------------------
+TOPIC 3: UDP COMMUNICATION & FRAGMENTATION
+--------------------------------------------------------------------------------
+
+FILES: UDPHandler.java, PacketSerialiser.java, FragmentAssembler.java, NetworkPacket.java
+
+HOW IT WORKS:
+  
+  SENDING:
+  1. Create NetworkPacket with: type, nodeId, nickname, timestamp, payload
+  2. Serialize to bytes using Java ObjectOutputStream (PacketSerialiser)
+  3. If size > 8KB, fragment into chunks with sequence numbers
+  4. Send each fragment via DatagramSocket.send()
+
+  RECEIVING:
+  1. DatagramSocket.receive() gets raw bytes
+  2. Check if fragment (has fragment header)
+  3. If fragmented, collect in FragmentAssembler until complete
+  4. Deserialize complete packet via ObjectInputStream
+  5. Pass to handleIncomingPacket() for processing
+
+  FRAGMENTATION DETAILS:
+  - MAX_PACKET_SIZE = 8192 bytes (safe UDP size)
+  - HEADER_OVERHEAD = 512 bytes reserved
+  - MAX_PAYLOAD_SIZE = 7680 bytes per fragment
+  - Fragment header: packetId (UUID), seqNum, totalFragments, data
+
+WHY UDP NOT TCP?
+  - UDP is connectionless - fits P2P model (no "server")
+  - Lower overhead (no connection setup/teardown)
+  - We implement our own reliability where needed (ACKs)
+  - Broadcast/multicast only works with UDP
+
+PACKET TYPES (MessageType enum):
+  - CHAT_MESSAGE: Regular chat message
+  - JOIN_REQUEST: Node wants to join swarm
+  - PEER_LIST: List of known peers (for discovery)
+  - HEARTBEAT: "I'm still alive" signal
+  - MESSAGE_ACK: Delivery confirmation
+  - MESSAGE_SYNC: Request for history
+  - HISTORY_SNAPSHOT: Bulk history response
+  - FILE_TRANSFER: Binary file data
+  - KEY_NODE_ANNOUNCE: Key node broadcasting status
+  - LEAVE_NOTIFICATION: Graceful disconnect
+
+POTENTIAL QUESTIONS:
+  Q: "Why fragment at 8KB?"
+  A: UDP has no guaranteed max size, but 8KB is safe for most networks.
+     Larger packets risk fragmentation at IP level which can cause loss.
+
+  Q: "What happens if a fragment is lost?"
+  A: FragmentAssembler has a timeout. If not all fragments arrive,
+     the partial packet is discarded. Sender would need to retry.
+
+  Q: "Why serialize with ObjectOutputStream?"
+  A: Java's built-in serialization handles complex objects (nested classes,
+     collections). Trade-off: not language-agnostic, but simple to implement.
+
+--------------------------------------------------------------------------------
+TOPIC 4: PEER DISCOVERY & ROOM DISCOVERY
+--------------------------------------------------------------------------------
+
+FILES: DiscoveryHandler.java, RoomInfo.java
+
+HOW IT WORKS:
+
+  ROOM DISCOVERY (finding networks without prior knowledge):
+  1. DiscoveryHandler broadcasts on UDP ports 6000-6099
+  2. Key nodes send RoomInfo: roomId, roomName, seedAddress, memberCount
+  3. Non-key nodes listen for broadcasts
+  4. Discovered rooms stored in: Map<UUID, RoomInfo> discoveredRooms
+
+  BROADCAST MECHANISM:
+  - Uses DatagramSocket with broadcast address (255.255.255.255)
+  - Sends to ports 6000-6099 (100 ports for redundancy)
+  - Broadcasts every 5 seconds if key node
+  - Initial burst on startup for quick discovery
+
+  PEER DISCOVERY (finding nodes from other nodes):
+  1. When joining, new node sends JOIN_REQUEST
+  2. Existing node responds with PEER_LIST
+  3. New node adds all peers from list
+  4. Peer lists also exchanged periodically via heartbeats
+
+  MANUAL SEED (/seed command):
+  - For networks blocking broadcast
+  - Adds unicast target: discoveryHandler.addUnicastTarget(ip, port)
+  - Directly contacts known node to bootstrap
+
+WHY PORTS 6000-6099?
+  - Single port might be blocked or in use
+  - Range increases chance of successful discovery
+  - Hash of roomId could select specific port for efficiency
+
+POTENTIAL QUESTIONS:
+  Q: "How do you handle nodes on different subnets?"
+  A: UDP broadcast only works on local subnet. For WAN, use /seed command
+     to manually specify known nodes, or implement a directory service.
+
+  Q: "What if two rooms have the same name?"
+  A: Rooms are identified by roomId (UUID), not name. Display shows name,
+     but internal logic uses UUID. Names can be duplicated safely.
+
+  Q: "How does a new node find the network initially?"
+  A: Listens for broadcasts. If none received (restrictive network),
+     user can /seed with a known node's IP:port.
+
+--------------------------------------------------------------------------------
+TOPIC 5: LEADER-ELECTED ROOM ARCHITECTURE & KEY NODES
+--------------------------------------------------------------------------------
+
+FILES: SwarmManager.java, ChatNode.java
+
+TERMINOLOGY CLARIFICATION:
+  - Code uses "swarm" but this is NOT a BitTorrent-style swarm
+  - More accurately: "Leader-Elected Room-Based P2P"
+  - Each room has a dynamically elected leader (key node)
+  - Similar to: IRC channels, Discord servers, Pub/Sub topics
+
+HOW IT WORKS:
+
+  ROOM = GROUP OF PEERS:
+  - Each room has unique swarmId (derived from roomId.hashCode())
+  - Nodes in same room share messages directly (full mesh within room)
+  - Messages are isolated per room (room partitioning)
+
+  KEY NODE ELECTION (Leader Election):
+  - Oldest node in room becomes key node (leader)
+  - "Oldest" = earliest joinTime (refreshed on room changes)
+  - On join, node compares joinTime with all peers
+  - checkKeyNodeStatus() in SwarmManager handles election
+  - This is deterministic: all nodes compute same result independently
+
+  KEY NODE RESPONSIBILITIES:
+  1. Broadcast room discovery (so others can find the room)
+  2. Provide history to new joiners
+  3. Key node is a ROLE, not special hardware - any node can become key
+
+  FAILOVER (Leader Re-election):
+  - Heartbeats detect key node failure (30 sec timeout)
+  - Remaining nodes run election: oldest becomes new key
+  - ">>> Becoming swarm key node" logged on promotion
+  - Network continues without interruption
+
+  CODE FLOW FOR ELECTION:
+  1. Peer timeout detected: handlePeerTimeout()
+  2. If timed-out peer was key: swarmManager.handleKeyNodeLeft()
+  3. SwarmManager.checkKeyNodeStatus() compares joinTimes
+  4. Oldest calls becomeKeyNode() -> node.setSwarmKey(true)
+
+WHY THIS IS MORE SCALABLE THAN FULL-MESH:
+  - Full mesh: Every node broadcasts to ALL nodes (O(N) per message)
+  - Your design: Nodes only broadcast within their room (O(N/R) per message)
+  - Discovery broadcast: Only key nodes, not all nodes
+  - With 100 nodes in 4 rooms: 75% fewer connections than full mesh
+
+WHY "OLDEST = KEY"?
+  - Simple, deterministic rule all nodes can compute independently
+  - No voting or consensus protocol needed (no Paxos/Raft complexity)
+  - Consistent result across all nodes
+  - No communication overhead for election
+
+POTENTIAL QUESTIONS:
+  Q: "Is this really P2P if there's a leader?"
+  A: Yes! The key node is a temporary ROLE, not a central server.
+     Any node can become key. Key failure = election, not total failure.
+     This is called "Super-Peer" or "Leader-Elected" P2P architecture.
+
+  Q: "What if two nodes have the same joinTime?"
+  A: Extremely unlikely (millisecond precision), but we could use nodeId
+     as tiebreaker. Current implementation would have both think they're key
+     temporarily, but heartbeats would resolve it.
+
+  Q: "Why not elect the node with best connectivity?"
+  A: Would require measuring connectivity, exchanging metrics, reaching
+     consensus. "Oldest" is simple and requires no coordination.
+
+  Q: "Is this a single point of failure?"
+  A: No! If key fails, a new key is elected automatically. The "single"
+     key is for efficiency (one broadcaster), not reliability.
+
+  Q: "How does this compare to BitTorrent swarms?"
+  A: BitTorrent swarms are about sharing file CHUNKS from multiple peers.
+     Your rooms are about sharing MESSAGES in isolated groups.
+     Both are P2P, but different use cases and topology.
+
+--------------------------------------------------------------------------------
+TOPIC 6: MESSAGE DELIVERY & ACKNOWLEDGMENTS
+--------------------------------------------------------------------------------
+
+FILES: ChatNode.java (sendChatMessage, handleMessageAck), MessageStatusListener.java
+
+HOW IT WORKS:
+
+  SENDING:
+  1. sendChatMessage() creates ChatMessage with UUID
+  2. If peers exist, add messageId to pendingMessages set
+  3. Broadcast to all swarm peers
+  4. GUI shows message in GREY (pending)
+
+  RECEIVING (other node):
+  1. handleChatMessage() processes incoming message
+  2. Sends MESSAGE_ACK back to sender with messageId
+  3. Stores message locally, displays to user
+
+  ACK HANDLING (original sender):
+  1. handleMessageAck() receives ACK
+  2. Removes messageId from pendingMessages
+  3. Notifies listeners: notifyMessageDelivered(messageId)
+  4. GUI changes message from GREY to WHITE
+
+  TIMEOUT (CLI):
+  - checkPendingMessageTimeouts() runs in chat loop
+  - Messages pending > 3 seconds shown with [UNCONFIRMED]
+  - Prevents messages from being "lost" silently
+
+WHY ACKS?
+  - UDP doesn't guarantee delivery
+  - User wants to know if message was received
+  - Enables retry logic (not currently implemented but possible)
+
+POTENTIAL QUESTIONS:
+  Q: "What if the ACK itself is lost?"
+  A: Message stays grey/unconfirmed. User sees it might not have arrived.
+     Could implement retry, but current design shows status honestly.
+
+  Q: "Do you ACK to all recipients or just one?"
+  A: Each recipient sends their own ACK. First ACK turns message white.
+     This means "at least one peer received it."
+
+  Q: "Why not use TCP for reliability?"
+  A: TCP requires connection per peer (N connections for N peers).
+     UDP + selective ACKs is more efficient for broadcast patterns.
+
+--------------------------------------------------------------------------------
+TOPIC 7: HISTORY SYNCHRONIZATION
+--------------------------------------------------------------------------------
+
+FILES: ChatNode.java (beginHistorySync, handleHistorySnapshot, handleMessageSync)
+
+HOW IT WORKS:
+
+  WHEN JOINING:
+  1. joinNetwork() calls beginHistorySync("joining network")
+  2. Sets historySyncInProgress = true, outboundMutedForSync = true
+  3. Sends JOIN_REQUEST to target peer
+  4. Target responds with PEER_LIST and HISTORY_SNAPSHOT
+  5. HISTORY_SNAPSHOT contains: List<ChatMessage> (all messages)
+
+  APPLYING HISTORY:
+  1. handleHistorySnapshot() receives message list
+  2. For each message: if not already known, add to messageHistory
+  3. Update Lamport clock to highest seen timestamp
+  4. Set historySyncInProgress = false, outboundMutedForSync = false
+  5. Process any deferred packets that arrived during sync
+
+  MANUAL RESYNC (/resync):
+  1. rebuildChatHistory() clears local messageHistory
+  2. Sends MESSAGE_SYNC request to all peers
+  3. Peers respond with HISTORY_SNAPSHOT
+  4. New history overwrites local (fresh rebuild)
+
+  TIMEOUT:
+  - 5-second timer for sync completion
+  - If no response, historySyncTimer fires
+  - Marks sync complete with whatever data received
+  - Prevents indefinite waiting
+
+WHY MUTE OUTBOUND DURING SYNC?
+  - Prevents sending messages before having full context
+  - User might reply to message they haven't seen yet
+  - Ensures consistency: see history, then participate
+
+POTENTIAL QUESTIONS:
+  Q: "What if history is huge?"
+  A: Current implementation sends all messages. Could implement pagination
+     or "last N messages" for scalability. Fragmentation handles large payloads.
+
+  Q: "What if two peers send different histories?"
+  A: Messages deduplicated by UUID. Union of all received histories used.
+     Lamport timestamps ensure consistent ordering regardless of source.
+
+  Q: "How do you handle concurrent history requests?"
+  A: historySyncInProgress flag prevents multiple syncs. Requests during
+     active sync are ignored or deferred.
+
+--------------------------------------------------------------------------------
+TOPIC 8: HEARTBEAT & FAILURE DETECTION
+--------------------------------------------------------------------------------
+
+FILES: ChatNode.java (startHeartbeat, handleHeartbeat, checkPeerTimeouts)
+
+HOW IT WORKS:
+
+  SENDING HEARTBEATS:
+  - Timer fires every HEARTBEAT_INTERVAL_MS (10 seconds)
+  - Broadcasts HEARTBEAT packet to all known peers
+  - Heartbeat contains: nodeId, nickname, swarmId, clock
+
+  RECEIVING HEARTBEATS:
+  - handleHeartbeat() updates peer's lastSeen timestamp
+  - Also updates Lamport clock from heartbeat
+  - Peer considered "alive" as long as heartbeats arrive
+
+  TIMEOUT DETECTION:
+  - checkPeerTimeouts() runs periodically
+  - If now - peer.lastSeen > PEER_TIMEOUT_MS (30 sec): peer is dead
+  - Removes peer from knownPeers, swarmPeers
+  - If dead peer was key node: triggers election
+
+  GRACEFUL VS UNGRACEFUL:
+  - Graceful: node sends LEAVE_NOTIFICATION before stopping
+  - Ungraceful: no notification, detected by timeout
+  - Both handled, but graceful is faster (immediate removal)
+
+WHY 30 SECONDS?
+  - Long enough to survive temporary network issues
+  - Short enough to detect failures reasonably quickly
+  - Trade-off: longer = more tolerant, shorter = faster detection
+
+POTENTIAL QUESTIONS:
+  Q: "Why not ping/pong instead of periodic heartbeat?"
+  A: Heartbeat is simpler - no request/response coordination.
+     Every node broadcasts independently. Scales better with more peers.
+
+  Q: "What about network partitions?"
+  A: Nodes on each side of partition would timeout each other.
+     Each partition continues independently. Merge on reconnect is complex
+     (not fully implemented - would need conflict resolution).
+
+  Q: "Could heartbeat spam overload the network?"
+  A: 10-second interval is low overhead. With 100 peers, that's only
+     10 small packets/second received. Could increase interval if needed.
+
+--------------------------------------------------------------------------------
+TOPIC 9: FILE TRANSFER
+--------------------------------------------------------------------------------
+
+FILES: FileTransfer.java, ChatNode.java (sendFile, handleFileTransfer)
+
+HOW IT WORKS:
+
+  SENDING:
+  1. User selects file via /sendfile or GUI button
+  2. File read into byte[] (max 2MB enforced)
+  3. Create FileTransfer object: fileId (UUID), fileName, fileSize, data, sender
+  4. Wrap in NetworkPacket with type FILE_TRANSFER
+  5. sendWithFragmentation() breaks into UDP-safe chunks
+  6. Broadcast to all swarm peers
+
+  RECEIVING:
+  1. handleFileTransfer() extracts FileTransfer from packet
+  2. Check receivedFileIds to prevent duplicate processing
+  3. Save file to current directory with original filename
+  4. Display: "[FILE RECEIVED] test.txt from Alice (1234 bytes)"
+
+  DEDUPLICATION:
+  - receivedFileIds set tracks processed file UUIDs
+  - Same file sent twice won't save twice
+  - Cleared when leaving room (new room = fresh context)
+
+WHY P2P NOT CLIENT/SERVER?
+  - Fits the distributed architecture
+  - No single point of failure for file hosting
+  - Sender broadcasts, all peers get it simultaneously
+
+LIMITATIONS:
+  - 2MB max file size (safety limit)
+  - No resume for interrupted transfers
+  - No selective recipients (broadcasts to all)
+
+POTENTIAL QUESTIONS:
+  Q: "How do you handle files larger than one UDP packet?"
+  A: Same fragmentation as messages. FragmentAssembler collects pieces.
+     File data is just bytes in the payload, fragmenter doesn't care.
+
+  Q: "What about file integrity?"
+  A: Java serialization includes some checksumming. Could add explicit
+     hash verification for production use.
+
+  Q: "Could you implement file request (pull) instead of push?"
+  A: Yes, would need FILE_REQUEST message type. Receiver requests,
+     holder sends. More complex but enables on-demand fetching.
+
+--------------------------------------------------------------------------------
+TOPIC 10: MALFORMED DATA HANDLING
+--------------------------------------------------------------------------------
+
+FILES: UDPHandler.java, PacketSerialiser.java
+
+HOW IT WORKS:
+
+  RECEIVING:
+  1. Raw bytes received from network
+  2. PacketSerialiser.deserialize() attempts to parse
+  3. Uses ObjectInputStream which validates structure
+  4. If invalid: ClassNotFoundException, IOException, etc.
+
+  ERROR HANDLING:
+  try {
+      NetworkPacket packet = PacketSerialiser.deserialize(data);
+      listener.onPacketReceived(packet, senderAddress, senderPort);
+  } catch (Exception e) {
+      System.err.println("Error handling packet from " + sender);
+      e.printStackTrace();
+  }
+
+  - Bad packets logged and discarded
+  - No crash, no corruption
+  - Network continues normally
+
+TYPES OF MALFORMED DATA:
+  - Random garbage bytes
+  - Truncated packets
+  - Wrong protocol entirely (HTTP, DNS, etc.)
+  - Tampered/corrupted packets
+
+POTENTIAL QUESTIONS:
+  Q: "What if an attacker sends malicious packets?"
+  A: Deserialization catches format errors. However, Java deserialization
+     can have security issues (gadget chains). Production would use
+     safer format like JSON/Protobuf with validation.
+
+  Q: "How do you distinguish your protocol from other UDP traffic?"
+  A: Could add magic bytes at start of packet. Currently relies on
+     serialization format - if it deserializes to NetworkPacket, it's ours.
+
+  Q: "What about partially valid packets?"
+  A: ObjectInputStream is all-or-nothing. Either full object deserializes
+     or exception thrown. No partial state corruption.
+
+--------------------------------------------------------------------------------
+TOPIC 11: THREAD SAFETY
+--------------------------------------------------------------------------------
+
+FILES: ChatNode.java (uses ConcurrentHashMap, ConcurrentLinkedQueue, AtomicLong)
+
+HOW IT WORKS:
+
+  CONCURRENT DATA STRUCTURES:
+  - ConcurrentHashMap<UUID, PeerInfo> knownPeers
+  - ConcurrentHashMap<UUID, ChatMessage> messageHistory  
+  - ConcurrentHashMap.newKeySet() for swarmPeers, keyNodePeers
+  - ConcurrentLinkedQueue for deferredPackets
+  - AtomicLong for lamportClock
+
+  WHY NEEDED?
+  - Multiple threads access shared state:
+    * Main thread (user input)
+    * UDP receiver thread (incoming packets)
+    * Heartbeat timer thread
+    * Robot thread (if enabled)
+  - Without synchronization: race conditions, data corruption
+
+  ATOMIC OPERATIONS:
+  - lamportClock.incrementAndGet() - atomic increment
+  - lamportClock.updateAndGet(fn) - atomic compare-and-update
+  - ConcurrentHashMap.putIfAbsent() - atomic conditional insert
+
+POTENTIAL QUESTIONS:
+  Q: "Why ConcurrentHashMap instead of synchronized HashMap?"
+  A: ConcurrentHashMap allows concurrent reads without blocking.
+     synchronized would lock entire map for any operation.
+     Better performance with many readers, few writers.
+
+  Q: "Are there any remaining race conditions?"
+  A: Possible in complex operations spanning multiple collections.
+     Example: checking if peer exists then adding message - peer could
+     be removed between check and add. Acceptable for chat app.
+
+  Q: "How do you handle the GUI thread?"
+  A: Swing requires UI updates on Event Dispatch Thread.
+     Use SwingUtilities.invokeLater() for all UI modifications.
+
+--------------------------------------------------------------------------------
+TOPIC 12: NETWORK SIMULATION (/netloss)
+--------------------------------------------------------------------------------
+
+FILES: NetworkConditions.java, UDPHandler.java
+
+HOW IT WORKS:
+
+  CONFIGURATION:
+  - NetworkConditions.setDropPercent(50) sets 50% loss
+  - Stored in static volatile double fields
+  - Applied to both inbound and outbound
+
+  OUTBOUND DROP (in UDPHandler.send):
+  if (NetworkConditions.shouldDropOutbound()) {
+      System.out.println("[Simulated] Dropped outbound packet");
+      return; // Don't actually send
+  }
+
+  INBOUND DROP (in receive loop):
+  if (NetworkConditions.shouldDropInbound()) {
+      System.out.println("[Simulated] Dropped inbound packet");
+      continue; // Discard, don't process
+  }
+
+  RANDOM DECISION:
+  public static boolean shouldDropOutbound() {
+      return Math.random() * 100 < outboundDropPercent;
+  }
+
+WHY USEFUL?
+  - Test resilience without actual network issues
+  - Demonstrate timeout detection
+  - Show message delivery status (grey = pending)
+  - Verify system degrades gracefully
+
+POTENTIAL QUESTIONS:
+  Q: "Does this affect discovery too?"
+  A: Yes, all UDP traffic goes through UDPHandler. Discovery packets
+     can be dropped too, simulating real-world discovery issues.
+
+  Q: "What's realistic packet loss?"
+  A: Internet typically <1%, WiFi maybe 1-5%, bad connections 10-20%.
+     50%+ is extreme stress testing.
+
+================================================================================
+COMMON INTERVIEW QUESTIONS & ANSWERS
+================================================================================
+
+Q: "Walk me through what happens when a user sends a message."
+
+A: 1. User types message, hits enter
+   2. sendChatMessage() creates ChatMessage with UUID and incremented Lamport clock
+   3. Message added to local messageHistory
+   4. NetworkPacket created with CHAT_MESSAGE type
+   5. Packet serialized to bytes via ObjectOutputStream
+   6. If >8KB, fragmented into chunks
+   7. Each chunk sent via UDP to all swarm peers
+   8. Message shown in grey (pending) in GUI
+   9. Recipients deserialize, check UUID for duplicates
+   10. Recipients update their Lamport clock (max rule)
+   11. Recipients store message and display it
+   12. Recipients send MESSAGE_ACK back
+   13. Original sender receives ACK, removes from pending
+   14. GUI updates message from grey to white
+
+---
+
+Q: "How do you ensure all nodes see messages in the same order?"
+
+A: Lamport clocks. Each message has a logical timestamp. On send, we increment
+   our clock. On receive, we take max(local, received) + 1. This guarantees
+   causal ordering - if A caused B, timestamp(A) < timestamp(B). Ties broken
+   by comparing node UUIDs for deterministic total ordering.
+
+---
+
+Q: "What happens if the key node crashes?"
+
+A: 1. Other nodes stop receiving heartbeats from key
+   2. After 30 seconds, they timeout the key node
+   3. SwarmManager.handleKeyNodeLeft() triggers
+   4. Remaining nodes compare joinTimes
+   5. Node with earliest joinTime becomes new key
+   6. New key starts broadcasting room discovery
+   7. Network continues without interruption
+
+---
+
+Q: "How is this different from client/server architecture?"
+
+A: - No central server required
+   - Any node can be first (seed node becomes key)
+   - Key node failure causes failover, not total failure
+   - All nodes can send/receive directly to/from each other
+   - Discovery is peer-to-peer (broadcast + peer list exchange)
+   - Data replicated across all nodes, not stored centrally
+
+---
+
+Q: "What are the trade-offs of using UDP?"
+
+A: Pros:
+   - Connectionless (no setup overhead)
+   - Supports broadcast for discovery
+   - Lower latency than TCP
+   - Fits P2P model naturally
+
+   Cons:
+   - No guaranteed delivery (we add ACKs)
+   - No guaranteed ordering (we use Lamport clocks)
+   - Packet size limits (we fragment)
+   - No congestion control (could flood network)
+
+---
+
+Q: "How would you scale this to 1000 nodes?"
+
+A: Current design already scales better than naive full-mesh because of room
+   partitioning. With 1000 nodes across 40 rooms of 25 each:
+   - Broadcast cost: 24 messages per room (not 999)
+   - Discovery: Only 40 key nodes broadcast (not 1000)
+   
+   For even larger scale:
+   - Gossip protocol: don't send to all, send to random subset who forward
+   - DHT (Distributed Hash Table): structured routing like Chord/Kademlia
+   - Message TTL: limit hop count to prevent flooding
+   - Hierarchical rooms: rooms of rooms with super-key nodes
+
+---
+
+Q: "Is your design more scalable than full-mesh P2P?"
+
+A: Yes! Full-mesh requires O(N²) connections and O(N) messages per broadcast.
+   My design uses room partitioning:
+   - Connections: O(N²/R) where R = number of rooms
+   - Broadcast: O(N/R) per room
+   - Discovery: Only key nodes broadcast (1 per room, not all nodes)
+   
+   Example with 100 nodes:
+   - Full mesh: 4,950 connections, 99 messages per broadcast
+   - 4 rooms of 25: ~1,200 connections, 24 messages per broadcast
+   
+   The trade-off: nodes in different rooms can't directly chat (by design -
+   room isolation is a feature for topic separation, like Discord channels).
+
+---
+
+Q: "Why do you call it 'swarm' in the code but it's not BitTorrent-style?"
+
+A: Fair point! The code uses "swarm" loosely to mean "group of peers."
+   More accurately, it's "Leader-Elected Room-Based P2P":
+   - BitTorrent swarms: peers sharing file CHUNKS, no leader, tracker-based
+   - My rooms: peers sharing MESSAGES, elected leader, broadcast discovery
+   
+   Both are valid P2P architectures, just different patterns for different
+   use cases. Mine is closer to IRC/Discord channel model.
+
+================================================================================

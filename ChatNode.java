@@ -1,3 +1,4 @@
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -41,11 +42,15 @@ public class ChatNode {
     private volatile boolean outboundMutedForSync;
     private volatile long highestHistoryTimestamp;
     private java.util.Timer historySyncTimer;
+    private java.util.Timer peerTimeoutTimer;
     private static final long HISTORY_SYNC_TIMEOUT_MS = 5000; // 5 second timeout
+    private static final long PEER_TIMEOUT_MS = 30000; // 30 seconds without heartbeat = dead
+    private static final long HEARTBEAT_INTERVAL_MS = 10000; // Send heartbeat every 10 seconds
     
     // Pending message tracking for delivery status
     private Set<UUID> pendingMessages;  // Messages awaiting ACK
     private List<MessageStatusListener> messageStatusListeners;
+    private List<RoomDiscoveryListener> roomDiscoveryListeners;
     
     // Network components
     private UDPHandler udpHandler;
@@ -88,6 +93,7 @@ public class ChatNode {
         this.highestHistoryTimestamp = 0L;
         this.pendingMessages = ConcurrentHashMap.newKeySet();
         this.messageStatusListeners = new ArrayList<>();
+        this.roomDiscoveryListeners = new ArrayList<>();
         
         this.fragmentAssembler = new FragmentAssembler();
         this.running = false;
@@ -105,11 +111,35 @@ public class ChatNode {
             roomName,
             ipAddress,
             port,
-            this::getSwarmMemberCount
+            new DiscoveryHandler.DiscoveryListener() {
+                @Override
+                public int getCurrentMemberCount() {
+                    return getSwarmMemberCount();
+                }
+                
+                @Override
+                public void onRoomDiscovered(RoomInfo room) {
+                    notifyRoomDiscovered(room);
+                }
+            }
         );
         discoveryHandler.setBroadcastEnabled(false); // enable once we become an active room
         knownPeers.put(nodeId, createOwnPeerInfo());
         this.logFilePath = initLogPath();
+    }
+    
+    private void notifyRoomDiscovered(RoomInfo room) {
+        for (RoomDiscoveryListener listener : roomDiscoveryListeners) {
+            listener.onRoomDiscovered(room);
+        }
+    }
+    
+    public void addRoomDiscoveryListener(RoomDiscoveryListener listener) {
+        roomDiscoveryListeners.add(listener);
+    }
+    
+    public void removeRoomDiscoveryListener(RoomDiscoveryListener listener) {
+        roomDiscoveryListeners.remove(listener);
     }
     
     // Lamport clock operations
@@ -163,6 +193,15 @@ public class ChatNode {
             syncSelfPeerInfo();
             return;
         }
+        
+        // If we're a key node and peer is from different swarm, they might be trying to join us
+        // Update their swarm ID to match ours so they become part of our swarm
+        boolean peerJoiningOurSwarm = isSwarmKey && peer.getSwarmId() != this.swarmId && !peer.isSwarmKey();
+        if (peerJoiningOurSwarm) {
+            peer.setSwarmId(this.swarmId);
+            System.out.println("Peer " + peer.getNickname() + " joining our swarm (updated their swarm ID)");
+        }
+        
         adoptSwarmFromPeer(peer);
 
         boolean sameSwarm = peer.getSwarmId() == this.swarmId;
@@ -424,6 +463,9 @@ public class ChatNode {
         
         System.out.println("Node started: " + this);
         
+        // Start heartbeat/timeout timer
+        startHeartbeatTimer();
+        
         // After joining, request key nodes if not first member
         if (!getAllPeers().isEmpty()) {
             new Thread(() -> {
@@ -434,6 +476,65 @@ public class ChatNode {
                     Thread.currentThread().interrupt();
                 }
             }).start();
+        }
+    }
+    
+    private void startHeartbeatTimer() {
+        stopHeartbeatTimer();
+        peerTimeoutTimer = new java.util.Timer("PeerHeartbeat", true);
+        
+        // Send heartbeat periodically
+        peerTimeoutTimer.scheduleAtFixedRate(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                if (running) {
+                    sendHeartbeat();
+                    checkPeerTimeouts();
+                }
+            }
+        }, HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS);
+    }
+    
+    private void stopHeartbeatTimer() {
+        if (peerTimeoutTimer != null) {
+            peerTimeoutTimer.cancel();
+            peerTimeoutTimer = null;
+        }
+    }
+    
+    private void sendHeartbeat() {
+        NetworkPacket heartbeat = new NetworkPacket(
+            MessageType.HEARTBEAT,
+            nodeId,
+            nickname,
+            incrementClock(),
+            null
+        );
+        broadcastToSwarm(heartbeat);
+        if (isSwarmKey) {
+            broadcastToKeyNodes(heartbeat);
+        }
+    }
+    
+    private void checkPeerTimeouts() {
+        long now = System.currentTimeMillis();
+        List<UUID> timedOut = new ArrayList<>();
+        
+        for (PeerInfo peer : knownPeers.values()) {
+            if (peer.getNodeId().equals(nodeId)) {
+                continue; // Skip self
+            }
+            if (now - peer.getLastSeen() > PEER_TIMEOUT_MS) {
+                timedOut.add(peer.getNodeId());
+            }
+        }
+        
+        for (UUID peerId : timedOut) {
+            PeerInfo peer = knownPeers.get(peerId);
+            if (peer != null) {
+                System.out.println("Peer timed out (no heartbeat): " + peer.getNickname());
+                removePeer(peerId);
+            }
         }
     }
     
@@ -449,6 +550,10 @@ public class ChatNode {
         sendLeaveNotification();
         
         running = false;
+        
+        // Stop heartbeat timer
+        stopHeartbeatTimer();
+        
         udpHandler.stop();
         
         // Stop discovery
@@ -564,11 +669,7 @@ public class ChatNode {
      */
     private void notifyMessageDelivered(UUID messageId) {
         for (MessageStatusListener listener : messageStatusListeners) {
-            try {
-                listener.onMessageStatusChanged(messageId, true);
-            } catch (Exception e) {
-                // Ignore listener exceptions
-            }
+            listener.onMessageStatusChanged(messageId, true);
         }
     }
     
@@ -636,17 +737,17 @@ public class ChatNode {
     }
     
     private void sendMessageAck(UUID messageId, String targetAddress, int targetPort) {
+        NetworkPacket ackPacket = new NetworkPacket(
+            MessageType.MESSAGE_ACK,
+            nodeId,
+            nickname,
+            getClock(),
+            messageId
+        );
         try {
-            NetworkPacket ackPacket = new NetworkPacket(
-                MessageType.MESSAGE_ACK,
-                nodeId,
-                nickname,
-                getClock(),  // Don't increment clock for ACKs
-                messageId
-            );
             udpHandler.sendWithFragmentation(ackPacket, targetAddress, targetPort);
-        } catch (Exception e) {
-            // ACK failed - not critical
+        } catch (IOException e) {
+            // ACK delivery is best-effort
         }
     }
 
@@ -654,6 +755,7 @@ public class ChatNode {
         ChatMessage message = (ChatMessage) packet.getPayload();
 
         if (message == null) {
+            System.out.println("[DEBUG] processIncomingChat: message is null");
             return;
         }
 
@@ -665,8 +767,10 @@ public class ChatNode {
         // Store message
         addMessage(message);
 
-        // Display message
-        System.out.println(message);
+        // Display message - only show messages from OTHER nodes (we display our own separately)
+        if (!message.getSenderId().equals(nodeId)) {
+            System.out.println(message.toString());
+        }
 
         if (!shouldForward) {
             return;
@@ -769,7 +873,11 @@ public class ChatNode {
         System.out.println("History sync requested by " + packet.getSenderNickname() +
                            ". Sending " + messageHistory.size() + " messages.");
         sendChatHistoryTo(senderAddress, senderPort);
-        swarmManager.broadcastKeyNodeStatus();
+        
+        // Only broadcast key status if WE are actually the key node
+        if (isSwarmKey) {
+            swarmManager.broadcastKeyNodeStatus();
+        }
     }
 
     private void handleFileTransfer(NetworkPacket packet) {
@@ -850,6 +958,8 @@ public class ChatNode {
         leaveCurrentSwarm(!swarmPeers.isEmpty());
         setSwarmKey(false);
         setDiscoveryBroadcastEnabled(false);
+        // Reset join time so we don't steal key status from existing swarm members
+        refreshJoinMetadata();
     }
 
     public void setDiscoveryBroadcastEnabled(boolean enabled) {
@@ -878,7 +988,7 @@ public class ChatNode {
         return Collections.emptyList();
     }
     
-    public void sendTo(NetworkPacket packet, String address, int port) throws Exception {
+    public void sendTo(NetworkPacket packet, String address, int port) throws IOException {
         udpHandler.sendWithFragmentation(packet, address, port);
     }
     
@@ -891,7 +1001,7 @@ public class ChatNode {
             if (!peer.getNodeId().equals(excludeNodeId)) {
                 try {
                     udpHandler.sendWithFragmentation(packet, peer.getIpAddress(), peer.getPort());
-                } catch (Exception e) {
+                } catch (IOException e) {
                     System.err.println("Failed to forward to " + peer.getNickname());
                 }
             }
@@ -903,7 +1013,7 @@ public class ChatNode {
             if (!peer.getNodeId().equals(excludeNodeId)) {
                 try {
                     udpHandler.sendWithFragmentation(packet, peer.getIpAddress(), peer.getPort());
-                } catch (Exception e) {
+                } catch (IOException e) {
                     System.err.println("Failed to forward to key node " + peer.getNickname());
                 }
             }
@@ -921,6 +1031,9 @@ public class ChatNode {
         historySyncInProgress = false;
         outboundMutedForSync = false;
         deferredPackets.clear();
+        // Clear message history and file IDs when leaving room
+        messageHistory.clear();
+        receivedFileIds.clear();
         knownPeers.put(nodeId, createOwnPeerInfo());
     }
     
@@ -937,7 +1050,7 @@ public class ChatNode {
         
         try {
             udpHandler.sendWithFragmentation(packet, address, port);
-        } catch (Exception e) {
+        } catch (IOException e) {
             System.err.println("Failed to send peer list: " + e.getMessage());
         }
     }
@@ -960,7 +1073,7 @@ public class ChatNode {
 
         try {
             udpHandler.sendWithFragmentation(packet, address, port);
-        } catch (Exception e) {
+        } catch (IOException e) {
             System.err.println("Failed to send chat history snapshot: " + e.getMessage());
         }
     }
@@ -1054,7 +1167,7 @@ public class ChatNode {
                 continue;
             }
             addMessage(message);
-            System.out.println(message);
+            System.out.println(message.toString());
             applied++;
         }
 
@@ -1109,17 +1222,34 @@ public class ChatNode {
         System.out.println("Key node announced: " + keyNode.getNickname());
         
         if (keyNode.getNodeId().equals(nodeId)) {
-            if (!isSwarmKey) {
-                setSwarmKey(true);
-            }
-            updateSwarmKeyFlags(nodeId);
+            // This is ourselves announcing - ignore
             return;
         }
 
+        // Add/update the peer info
         addPeer(keyNode);
         
+        // Only consider key status changes within our swarm
         if (keyNode.getSwarmId() == this.swarmId) {
-            updateSwarmKeyFlags(keyNode.getNodeId());
+            // If we're already the key node, only defer to someone who joined BEFORE us
+            if (isSwarmKey) {
+                long ourJoinTime = swarmManager.getJoinTime();
+                long theirJoinTime = keyNode.getJoinTime();
+                
+                // Only give up key if they joined before us (they have seniority)
+                if (theirJoinTime < ourJoinTime) {
+                    System.out.println(">>> Deferring key node status to " + keyNode.getNickname() + " (joined earlier)");
+                    setSwarmKey(false);
+                    updateSwarmKeyFlags(keyNode.getNodeId());
+                } else {
+                    // We have seniority - re-announce ourselves as key
+                    System.out.println(">>> Ignoring key claim from " + keyNode.getNickname() + " (we joined earlier)");
+                    swarmManager.broadcastKeyNodeStatus();
+                }
+            } else {
+                // We're not the key - just update who the key is
+                updateSwarmKeyFlags(keyNode.getNodeId());
+            }
         }
     }
     

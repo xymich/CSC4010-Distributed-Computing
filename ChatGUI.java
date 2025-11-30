@@ -34,8 +34,8 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     };
     
     // ===== PENDING MESSAGE TRACKING =====
-    // Maps messageId -> (start position, end position) in chat pane
-    private Map<UUID, int[]> pendingMessagePositions = new ConcurrentHashMap<>();
+    // Maps messageId -> message text (for finding and updating color)
+    private Map<UUID, String> pendingMessageTexts = new ConcurrentHashMap<>();
     
     // ===== BUFFERED OUTPUT =====
     // Buffer messages before GUI is ready
@@ -51,6 +51,7 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     private JList<String> roomList;
     private JLabel statusLabel;
     private JLabel roomNameLabel;
+    private JButton disconnectBtn;  // Toggles between Disconnect/Reconnect
     
     // Store original System.out for restoration
     private PrintStream originalOut;
@@ -306,9 +307,9 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         robotBtn.setMaximumSize(new Dimension(200, 30));
         robotBtn.addActionListener(e -> toggleRobot());
 
-        JButton disconnectBtn = createButton("Disconnect", false);
+        disconnectBtn = createButton("Disconnect", false);
         disconnectBtn.setMaximumSize(new Dimension(200, 30));
-        disconnectBtn.addActionListener(e -> disconnect());
+        disconnectBtn.addActionListener(e -> toggleConnection());
 
         JButton logoutBtn = createButton("Logout", false);
         logoutBtn.setMaximumSize(new Dimension(200, 30));
@@ -425,18 +426,17 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     }
     
     /**
-     * Append a pending message (grey) and track its position for later update
+     * Append a pending message (grey) and track its text for later update
      */
     private void appendChatPending(String text, UUID messageId) {
+        // Store the text for later lookup (without newline)
+        pendingMessageTexts.put(messageId, text);
         SwingUtilities.invokeLater(() -> {
             StyledDocument doc = chatPane.getStyledDocument();
             SimpleAttributeSet attrs = new SimpleAttributeSet();
             StyleConstants.setForeground(attrs, TEXT_PENDING);
             try {
-                int startPos = doc.getLength();
                 doc.insertString(doc.getLength(), text + "\n", attrs);
-                int endPos = doc.getLength();
-                pendingMessagePositions.put(messageId, new int[]{startPos, endPos});
                 chatPane.setCaretPosition(doc.getLength());
             } catch (BadLocationException e) {
                 // Ignore
@@ -450,13 +450,21 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     @Override
     public void onMessageStatusChanged(UUID messageId, boolean delivered) {
         if (delivered) {
-            int[] positions = pendingMessagePositions.remove(messageId);
-            if (positions != null) {
+            String messageText = pendingMessageTexts.remove(messageId);
+            if (messageText != null) {
                 SwingUtilities.invokeLater(() -> {
-                    StyledDocument doc = chatPane.getStyledDocument();
-                    SimpleAttributeSet attrs = new SimpleAttributeSet();
-                    StyleConstants.setForeground(attrs, TEXT_COLOR);
-                    doc.setCharacterAttributes(positions[0], positions[1] - positions[0], attrs, false);
+                    try {
+                        StyledDocument doc = chatPane.getStyledDocument();
+                        String fullText = doc.getText(0, doc.getLength());
+                        int idx = fullText.indexOf(messageText);
+                        if (idx >= 0) {
+                            SimpleAttributeSet attrs = new SimpleAttributeSet();
+                            StyleConstants.setForeground(attrs, TEXT_COLOR);
+                            doc.setCharacterAttributes(idx, messageText.length(), attrs, false);
+                        }
+                    } catch (BadLocationException e) {
+                        // Ignore
+                    }
                 });
             }
         }
@@ -465,6 +473,7 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     private void handleCommand(String input) {
         String[] parts = input.split("\\s+", 2);
         String cmd = parts[0].toLowerCase();
+        String args = parts.length > 1 ? parts[1].trim() : "";
 
         switch (cmd) {
             case "/peers" -> {
@@ -482,12 +491,43 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
                 refreshRoomList();
                 appendChat("[System] Room list refreshed.", TEXT_MUTED);
             }
+            case "/join" -> {
+                if (args.isEmpty()) {
+                    appendChat("Usage: /join <room_number> or /join <ip:port>", TEXT_MUTED);
+                } else {
+                    joinByArgument(args);
+                }
+            }
+            case "/roomname" -> {
+                if (args.isEmpty()) {
+                    appendChat("Usage: /roomname <new name>", TEXT_MUTED);
+                } else {
+                    renameRoom(args);
+                }
+            }
             case "/resync" -> resyncHistory();
             case "/newroom" -> createNewRoom();
             case "/clear" -> chatPane.setText("");
             case "/robot" -> toggleRobot();
             case "/disconnect" -> disconnect();
+            case "/reconnect" -> reconnect();
             case "/logout" -> logout();
+            case "/seed" -> {
+                if (args.isEmpty()) {
+                    appendChat("Usage: /seed <ip> <port>", TEXT_MUTED);
+                } else {
+                    addDiscoverySeed(args);
+                }
+            }
+            case "/seeds" -> showDiscoverySeeds();
+            case "/netloss" -> {
+                if (args.isEmpty()) {
+                    showNetworkLoss();
+                } else {
+                    configureNetworkLoss(args);
+                }
+            }
+            case "/sendfile" -> sendFile();
             case "/help" -> showHelp();
             case "/quit" -> {
                 shutdown();
@@ -503,14 +543,171 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         appendChat("/messages - Show message history", TEXT_MUTED);
         appendChat("/status - Show node status", TEXT_MUTED);
         appendChat("/rooms - Refresh room list", TEXT_MUTED);
+        appendChat("/join <number|ip:port> - Join a room by number or address", TEXT_MUTED);
+        appendChat("/roomname <name> - Rename your room (key node only)", TEXT_MUTED);
         appendChat("/resync - Rebuild chat history", TEXT_MUTED);
         appendChat("/newroom - Create a new room as seed node", TEXT_MUTED);
         appendChat("/clear - Clear chat display", TEXT_MUTED);
         appendChat("/robot - Toggle robot chat", TEXT_MUTED);
-        appendChat("/disconnect - Disconnect", TEXT_MUTED);
-        appendChat("/logout - Logout and change name/IP/port", TEXT_MUTED);
+        appendChat("/seed <ip> <port> - Add a remote discovery seed", TEXT_MUTED);
+        appendChat("/seeds - Show configured discovery seeds", TEXT_MUTED);
+        appendChat("/netloss [0-100] - Simulate packet loss percentage", TEXT_MUTED);
+        appendChat("/sendfile - Send a file to the room", TEXT_MUTED);
+        appendChat("/disconnect - Disconnect from network", TEXT_MUTED);
+        appendChat("/reconnect - Reconnect to network", TEXT_MUTED);
+        appendChat("/logout - Logout and change identity", TEXT_MUTED);
         appendChat("/help - Show this help", TEXT_MUTED);
         appendChat("/quit - Exit application", TEXT_MUTED);
+    }
+
+    private void joinByArgument(String arg) {
+        if (node == null) {
+            appendChat("[Error] Node not initialized.", Color.RED);
+            return;
+        }
+
+        // Check if it's an IP:port format
+        if (arg.contains(":") || arg.contains(".")) {
+            String[] addrParts = arg.split(":");
+            if (addrParts.length == 2) {
+                try {
+                    String ip = addrParts[0].trim();
+                    int p = Integer.parseInt(addrParts[1].trim());
+                    node.prepareForJoin();
+                    node.joinNetwork(ip, p);
+                    appendChat("[System] Joining " + ip + ":" + p + "...", TEXT_MUTED);
+                    scheduleRefresh();
+                    return;
+                } catch (NumberFormatException e) {
+                    appendChat("[Error] Invalid port number.", Color.RED);
+                    return;
+                }
+            }
+        }
+
+        // Try as room number
+        try {
+            int roomNum = Integer.parseInt(arg.trim());
+            var rooms = new ArrayList<>(node.getDiscoveredRooms());
+            if (roomNum < 1 || roomNum > rooms.size()) {
+                appendChat("[Error] Invalid room number. Use /rooms to see list.", Color.RED);
+                return;
+            }
+            RoomInfo room = rooms.get(roomNum - 1);
+            
+            // Check if already in this room
+            if (room.getRoomId().equals(node.getRoomId())) {
+                appendChat("[System] Already in this room.", Color.ORANGE);
+                return;
+            }
+            
+            node.prepareForJoin();
+            node.joinNetwork(room.getSeedNodeAddress(), room.getSeedNodePort());
+            appendChat("[System] Joining room: " + room.getRoomName(), SKYPE_BLUE);
+            scheduleRefresh();
+        } catch (NumberFormatException e) {
+            appendChat("[Error] Invalid room number or address format.", Color.RED);
+        }
+    }
+
+    private void renameRoom(String newName) {
+        if (node == null || !node.isRunning()) {
+            appendChat("[Error] Not connected.", Color.RED);
+            return;
+        }
+        node.setRoomName(newName);
+        node.triggerDiscoveryBroadcast();
+        roomNameLabel.setText("Room: " + newName);
+        appendChat("[System] Room renamed to: " + newName, SKYPE_BLUE);
+    }
+
+    private void reconnect() {
+        if (node == null) {
+            appendChat("[Error] Node not initialized.", Color.RED);
+            return;
+        }
+        if (node.isRunning()) {
+            appendChat("[System] Already connected. Use /disconnect first.", TEXT_MUTED);
+            return;
+        }
+        node.start();
+        statusLabel.setText("Status: Connected");
+        disconnectBtn.setText("Disconnect");
+        appendChat("[System] Reconnected to network.", SKYPE_BLUE);
+        refreshPeerList();
+        refreshRoomList();
+    }
+
+    private void addDiscoverySeed(String args) {
+        String[] tokens = args.split("\\s+");
+        if (tokens.length != 2) {
+            appendChat("Usage: /seed <ip> <port>", TEXT_MUTED);
+            return;
+        }
+        try {
+            String ip = tokens[0];
+            int seedPort = Integer.parseInt(tokens[1]);
+            if (seedPort < 1024 || seedPort > 65535) {
+                appendChat("[Error] Port must be 1024-65535.", Color.RED);
+                return;
+            }
+            node.addDiscoverySeed(ip, seedPort);
+            appendChat("[System] Added discovery seed " + ip + ":" + seedPort, SKYPE_BLUE);
+        } catch (NumberFormatException e) {
+            appendChat("[Error] Invalid port number.", Color.RED);
+        }
+    }
+
+    private void showDiscoverySeeds() {
+        var seeds = node.getDiscoverySeeds();
+        if (seeds.isEmpty()) {
+            appendChat("[System] No remote discovery seeds configured.", TEXT_MUTED);
+            return;
+        }
+        appendChat("=== Discovery Seeds ===", SKYPE_BLUE);
+        for (var seed : seeds) {
+            appendChat("  " + seed.getAddress().getHostAddress() + ":" + seed.getPort(), TEXT_MUTED);
+        }
+    }
+
+    private void configureNetworkLoss(String percentStr) {
+        try {
+            double percent = Double.parseDouble(percentStr);
+            if (percent < 0 || percent > 100) {
+                appendChat("[Error] Value must be between 0 and 100.", Color.RED);
+                return;
+            }
+            NetworkConditions.setDropPercent(percent);
+            if (percent == 0) {
+                appendChat("[System] Network loss simulation disabled.", TEXT_MUTED);
+            } else {
+                appendChat("[System] Simulating ~" + percent + "% packet loss.", SKYPE_BLUE);
+            }
+        } catch (NumberFormatException e) {
+            appendChat("[Error] Invalid number. Usage: /netloss <0-100>", Color.RED);
+        }
+    }
+
+    private void showNetworkLoss() {
+        double outbound = NetworkConditions.getOutboundDropPercent();
+        double inbound = NetworkConditions.getInboundDropPercent();
+        if (outbound == 0 && inbound == 0) {
+            appendChat("[System] Network loss simulation is disabled.", TEXT_MUTED);
+        } else {
+            appendChat(String.format("[System] Current loss: outbound %.1f%%, inbound %.1f%%", outbound, inbound), TEXT_MUTED);
+        }
+    }
+
+    private void scheduleRefresh() {
+        javax.swing.Timer timer = new javax.swing.Timer(1500, ev -> {
+            refreshPeerList();
+            refreshRoomList();
+            if (node != null) {
+                roomNameLabel.setText("Room: " + node.getRoomName());
+            }
+            ((javax.swing.Timer)ev.getSource()).stop();
+        });
+        timer.start();
     }
 
     private void askToJoinNetwork() {
@@ -566,6 +763,17 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         int idx = roomList.getSelectedIndex();
         if (idx >= 0 && idx < rooms.size()) {
             RoomInfo room = rooms.get(idx);
+            
+            // Check if already in this room (by roomId or by address:port)
+            boolean sameRoom = room.getRoomId().equals(node.getRoomId());
+            boolean sameAddress = room.getSeedNodeAddress().equals(node.getIpAddress()) 
+                                  && room.getSeedNodePort() == node.getPort();
+            
+            if (sameRoom || sameAddress) {
+                appendChat("[System] You are already in this room!", Color.ORANGE);
+                return;
+            }
+            
             node.prepareForJoin();
             node.joinNetwork(room.getSeedNodeAddress(), room.getSeedNodePort());
             appendChat("[System] Joining room: " + room.getRoomName(), SKYPE_BLUE);
@@ -577,12 +785,26 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         }
     }
 
+    /**
+     * Toggle between connected and disconnected states
+     */
+    private void toggleConnection() {
+        if (node != null && node.isRunning()) {
+            // Currently connected - disconnect
+            disconnect();
+        } else {
+            // Currently disconnected - reconnect
+            reconnect();
+        }
+    }
+
     private void disconnect() {
         if (node != null && node.isRunning()) {
             stopRobot();
             node.stop();
             appendChat("[System] Disconnected from network.", TEXT_MUTED);
             statusLabel.setText("Status: Disconnected");
+            disconnectBtn.setText("Reconnect");
         }
     }
 
@@ -641,18 +863,26 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
             node = null;
         }
 
-        // Hide main window
+        // Clear state
+        pendingMessageTexts.clear();
+        bufferedMessages.clear();
+        guiReady = false;
+
+        // Remove all components and reset frame
+        getContentPane().removeAll();
+        
+        // Reset System.out to original
+        System.setOut(originalOut);
+
+        // Hide and fully dispose this window
         setVisible(false);
         dispose();
 
-        // Clear chat and pending messages
-        if (chatPane != null) {
-            chatPane.setText("");
-        }
-        pendingMessagePositions.clear();
-
-        // Show setup dialog again
-        showSetupDialog();
+        // Create a completely new GUI instance
+        SwingUtilities.invokeLater(() -> {
+            ChatGUI newGui = new ChatGUI();
+            newGui.initialize();
+        });
     }
     private void resyncHistory() {
         if (node != null && node.isRunning()) {
@@ -783,6 +1013,12 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
                     // Buffer messages until GUI is ready
                     bufferedMessages.add(x);
                 }
+            }
+            
+            @Override
+            public void println(Object x) {
+                // ChatMessage and other objects go through here
+                println(String.valueOf(x));
             }
         };
         System.setOut(guiOut);

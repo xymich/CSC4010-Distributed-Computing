@@ -28,6 +28,7 @@ public class RoomInfo implements Serializable {
     public long getLastSeen() { return lastSeen; }
     
     // Setters
+    public void setRoomName(String roomName) { this.roomName = roomName; }
     public void setMemberCount(int memberCount) { this.memberCount = memberCount; }
     public void updateLastSeen() { this.lastSeen = System.currentTimeMillis(); }
     

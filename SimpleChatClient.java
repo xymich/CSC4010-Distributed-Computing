@@ -29,21 +29,47 @@ public class SimpleChatClient implements MessageStatusListener {
     };
     private static final long ROBOT_MIN_DELAY_MS = 2000;
     private static final long ROBOT_MAX_DELAY_MS = 6000;
+    private static final long MESSAGE_ACK_TIMEOUT_MS = 3000;  // Wait 3 seconds for ACK before showing as failed
     
-    // Pending message tracking for CLI
-    private static Map<UUID, String> pendingMessages = new ConcurrentHashMap<>();
+    // Pending message tracking for CLI: messageId -> (display text, send timestamp)
+    private static Map<UUID, PendingMessage> pendingMessages = new ConcurrentHashMap<>();
     private static SimpleChatClient instance = new SimpleChatClient();
     
+    // Helper class to track pending message info
+    private static class PendingMessage {
+        final String displayText;
+        final long sentTime;
+        PendingMessage(String displayText) {
+            this.displayText = displayText;
+            this.sentTime = System.currentTimeMillis();
+        }
+    }
+    
     /**
-     * MessageStatusListener implementation - update pending message status
+     * MessageStatusListener implementation - display message when delivery confirmed
      */
     @Override
     public void onMessageStatusChanged(UUID messageId, boolean delivered) {
-        if (delivered) {
-            String pendingText = pendingMessages.remove(messageId);
-            if (pendingText != null) {
-                // Message delivered - re-print without "..." prefix
-                System.out.println("\r" + pendingText);
+        PendingMessage pending = pendingMessages.remove(messageId);
+        if (pending != null && delivered) {
+            // Message confirmed - display it
+            System.out.println(pending.displayText);
+        }
+    }
+    
+    /**
+     * Check for pending messages that have timed out and display them with failure indicator
+     */
+    private static void checkPendingMessageTimeouts() {
+        long now = System.currentTimeMillis();
+        var iterator = pendingMessages.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            PendingMessage pending = entry.getValue();
+            if (now - pending.sentTime > MESSAGE_ACK_TIMEOUT_MS) {
+                // Timed out - show message with failure indicator
+                System.out.println(pending.displayText + " [UNCONFIRMED]");
+                iterator.remove();
             }
         }
     }
@@ -362,6 +388,9 @@ public class SimpleChatClient implements MessageStatusListener {
     private static void chatLoop() {
         while (running) {
             try {
+                // Check for timed out pending messages
+                checkPendingMessageTimeouts();
+                
                 if (!scanner.hasNextLine()) {
                     break;
                 }
@@ -385,11 +414,10 @@ public class SimpleChatClient implements MessageStatusListener {
                         if (messageId != null) {
                             String displayText = "[" + node.getClock() + "] " + node.getNickname() + ": " + input;
                             if (node.isMessagePending(messageId)) {
-                                // Show pending indicator
-                                pendingMessages.put(messageId, displayText);
-                                System.out.println("... " + displayText);
+                                // Store as pending - will display when ACK received or timeout
+                                pendingMessages.put(messageId, new PendingMessage(displayText));
                             } else {
-                                // Immediately delivered (no peers or self-only)
+                                // No peers - immediately show (delivered to self)
                                 System.out.println(displayText);
                             }
                         }
@@ -683,6 +711,16 @@ public class SimpleChatClient implements MessageStatusListener {
             }
             
             RoomInfo room = rooms.get(roomNumber - 1);
+            
+            // Check if already in this room (by roomId or by address:port)
+            boolean sameRoom = room.getRoomId().equals(node.getRoomId());
+            boolean sameAddress = room.getSeedNodeAddress().equals(node.getIpAddress()) 
+                                  && room.getSeedNodePort() == node.getPort();
+            
+            if (sameRoom || sameAddress) {
+                System.out.println("You are already in this room!");
+                return;
+            }
             
             System.out.println("Joining room: " + room.getRoomName());
             

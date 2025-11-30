@@ -1,0 +1,22 @@
+
+1. CPU:
+   - AMD Ryzen 5 5500U: Up to macOS Tahoe 26
+2. GPU:
+   - AMD Radeon(TM) Graphics: macOS Catalina 10.15 to macOS Tahoe 26
+      - Connected Monitor: CMN14D4 (Internal)
+3. Sound:
+   - AMD High Definition Audio Device: Up to macOS Tahoe 26
+   - Realtek(R) Audio: Up to macOS Tahoe 26
+      - Audio Endpoint: Speakers
+   - AMD Audio Device: Unsupported
+      - Audio Endpoint: Microphone Array
+4. Network:
+   - MediaTek Wi-Fi 6 MT7921 Wireless LAN Card: Unsupported
+5. Storage Controllers:
+   - FCH SATA Controller [AHCI mode]: Up to macOS Tahoe 26
+   - FCH SATA Controller [AHCI mode]_#1: Up to macOS Tahoe 26
+   - 2210 NVMe SSD [Cobain]: Up to macOS Tahoe 26
+6. Bluetooth:
+   - MediaTek Bluetooth MT7921: Unsupported
+
+Press Enter to continue...

@@ -48,7 +48,6 @@ public class ChatLauncher {
 
     private static void launchGUI(String[] args) {
         System.out.println("Launching GUI mode...");
-        System.out.println("(Place a 'logo.png' file in the app directory for custom branding)");
         System.out.println();
         
         // JavaFX requires launching via Application.launch()

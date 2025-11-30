@@ -1,3 +1,4 @@
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -170,7 +171,7 @@ public class SwarmManager {
         for (PeerInfo keyNode : knownKeyNodes.values()) {
             try {
                 node.sendTo(packet, keyNode.getIpAddress(), keyNode.getPort());
-            } catch (Exception e) {
+            } catch (IOException e) {
                 System.err.println("Failed to notify key node: " + keyNode.getNickname());
             }
         }
@@ -227,7 +228,7 @@ public class SwarmManager {
         
         try {
             node.sendTo(packet, currentKeyNode.getIpAddress(), currentKeyNode.getPort());
-        } catch (Exception e) {
+        } catch (IOException e) {
             System.err.println("Failed to request key nodes: " + e.getMessage());
         }
     }

@@ -303,7 +303,16 @@ public class DiscoveryHandler {
                 discoveredRooms.put(room.getRoomId(), room);
                 System.out.println("Discovered new room: " + room.getRoomName() + " @ " + 
                                  room.getSeedNodeAddress() + ":" + room.getSeedNodePort());
+                // Notify listener of new room
+                if (listener != null) {
+                    listener.onRoomDiscovered(room);
+                }
             } else {
+                // Update room info (name may have changed)
+                if (!existing.getRoomName().equals(room.getRoomName())) {
+                    System.out.println("Room renamed: " + existing.getRoomName() + " -> " + room.getRoomName());
+                    existing.setRoomName(room.getRoomName());
+                }
                 existing.setMemberCount(room.getMemberCount());
                 existing.updateLastSeen();
             }
@@ -351,5 +360,6 @@ public class DiscoveryHandler {
      */
     public interface DiscoveryListener {
         int getCurrentMemberCount();
+        default void onRoomDiscovered(RoomInfo room) {}
     }
 }
