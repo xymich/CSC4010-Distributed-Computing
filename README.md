@@ -1,119 +1,123 @@
-# 🗨️ Slykord
+# P2P Distributed Chat System
 
-> A Scalable Peer-to-Peer Chat System inspired by **Sl**ack, Sk**y**pe, and Disc**ord** (hence "Slykord")
-
-📚 **CSC4010 Distributed Computing** - Assignment 2  
-🎓 Master's Year Computer Science @ Queen's University Belfast
+Leader-elected, room-based peer-to-peer chat over UDP, with both CLI and Swing GUI front-ends. Nodes discover rooms and peers via UDP broadcast, elect a key node per room, and exchange messages, history, and files without any central server.
 
 ---
 
-## ✨ Features
-
-- **Decentralized Architecture** - No central server required
-- **Swarm-based Routing** - Efficient message delivery through key nodes
-- **GUI & CLI Modes** - Choose your preferred interface
-- **File Sharing** - Send files directly to peers
-- **Chat History Sync** - Automatically sync messages when joining
-- **Room Discovery** - Find and join active chat rooms
-- **Lamport Clocks** - Consistent message ordering across peers
-
----
-
-## 🚀 Quick Start
+## 1. Build and Run
 
 ### Prerequisites
-- Java 11 or higher
-- Compiled classes in the `bin/` directory
+- Java 17+ (tested with recent OpenJDK)
+- UDP allowed on your local network (for discovery)
 
-### Running the Application
-
-**Interactive Mode** (recommended for first-time users):
-```bash
-java -cp bin ChatLauncher
-```
-
-**Direct Launch Options**:
-```bash
-# Launch with GUI (Skype-style interface)
-java -cp bin ChatLauncher --gui
-
-# Launch with CLI (Command Line Interface)
-java -cp bin ChatLauncher --cli
-
-# Show help
-java -cp bin ChatLauncher --help
-```
-
-**Alternative Direct Launch**:
-```bash
-java -cp bin ChatGUI          # GUI only
-java -cp bin SimpleChatClient # CLI only
-```
-
----
-
-## 🎮 CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `/peers` | List connected peers |
-| `/rooms` | Show discovered chat rooms |
-| `/status` | Display node status |
-| `/messages` | Show message history |
-| `/resync` | Rebuild chat history from peers |
-| `/clear` | Clear the screen |
-| `/robot` | Toggle robot mode (auto-responses) |
-| `/disconnect` | Leave the network gracefully |
-| `/help` | Show all available commands |
-| `/quit` | Exit the application |
-
-> 💡 **Tip**: All CLI commands also work in the GUI by typing them in the message input!
-
----
-
-## 🖼️ GUI Features
-
-- **Dark Theme** - Skype-inspired interface
-- **Peer Sidebar** - See who's online
-- **Room Browser** - Discover and join rooms
-- **File Sharing** - Easy drag-and-drop or file picker
-- **Custom Branding** - Slykord's Unique Branding for all!
-
----
-
-## 📁 Project Structure
-
-```
-├── ChatLauncher.java      # Main entry point
-├── ChatGUI.java           # JavaFX GUI client
-├── SimpleChatClient.java  # CLI client
-├── ChatNode.java          # Core P2P node logic
-├── SwarmManager.java      # Swarm coordination
-├── UDPHandler.java        # Network communication
-├── DiscoveryHandler.java  # Room discovery
-├── FragmentAssembler.java # Large message handling
-├── FileTransfer.java      # File sharing support
-└── bin/                   # Compiled classes
-```
-
----
-
-## 🔧 Building from Source
+### Compile
 
 ```bash
-# Compile all Java files
 javac -d bin *.java
-
-# Run the application
-java -cp bin ChatLauncher
 ```
+
+### Launch
+
+```bash
+cd bin
+java ChatLauncher
+```
+
+You will be prompted for:
+- Interface: `1` = GUI, `2` = CLI
+- Nickname
+- Local UDP port (e.g. 1111, 2222, 3333)
+- Whether to join an existing network or start as a new seed node
+
+For a quick multi-node demo, open 2–3 terminals or machines and start `ChatLauncher` on each with different ports.
 
 ---
 
-## 📝 Notes
+## 2. High-Level Features
 
-- Chat logs are saved to the `logs/` directory
-- Downloaded files are saved to the `downloads/` directory
-- The system uses UDP for communication (default port auto-selected)
+- **Leader‑elected room-based P2P**: Each chat room elects a key node (oldest member) to handle discovery broadcasts and history for joiners. Leadership is a role; any node can become key.
+- **Multiple rooms**: Create, discover, join, and rename rooms. Messages are isolated per room.
+- **Robust messaging**:
+  - Lamport logical clocks for consistent global ordering across nodes.
+  - Unique UUIDs for nodes and messages to avoid duplicates.
+  - Delivery acknowledgements: GUI shows pending vs delivered; CLI shows unconfirmed messages.
+- **History sync & recovery**:
+  - New node receives a full history snapshot on join.
+  - `/resync` rebuilds history from peers.
+  - `/messages` redraws chat from local stored history.
+  - Local log-based redraw is available via GUI and CLI helpers.
+- **Discovery**:
+  - Room discovery via UDP broadcast on a port range (key nodes only).
+  - Peer discovery via peer list exchange and heartbeats.
+  - Manual seeding with `/seed` for restrictive networks.
+- **File transfer**:
+  - `/sendfile` command (and GUI button) sends binary files P2P over UDP.
+  - Large payloads are fragmented and reassembled safely.
+- **Network simulation**:
+  - `/netloss` introduces configurable inbound/outbound packet loss.
+  - Demonstrates message loss, timeouts, and recovery under stress.
+- **Resilience**:
+  - Heartbeats and timeouts detect dead peers.
+  - Automatic key node failover when the current key leaves or crashes.
+- **GUI client**:
+  - Room list, peer list, key node markers.
+  - Message colouring for delivery status.
+  - Buttons for file send, resync, and local log load.
 
-*Keep in mind - this README.md was made entirely with an LLM and there may be errors
+---
+
+## 3. CLI Command Reference
+
+### Messaging & Info
+- `Just type + Enter` – Send a chat message
+- `/status` – Show node info (UUID, port, Lamport clock)
+- `/peers` – List connected peers in the current room
+- `/messages` – Display message history from local storage
+- `/rooms` – List discovered chat rooms
+
+### Room Management
+- `/join <number>` – Join a discovered room by index
+- `/newroom` – Create a new room
+- `/roomname <name>` – Rename current room (key node only)
+
+### Network Control
+- `/disconnect` – Gracefully disconnect from the network
+- `/reconnect` – Reconnect to the last room/network
+- `/seed <ip> <port>` – Manually add a discovery target
+- `/seeds` – List configured discovery targets
+
+### Testing & Simulation
+- `/robot` – Toggle automated robot chat messages
+- `/netloss <0-100>` – Simulate packet loss percentage
+- `/resync` – Rebuild history from peers
+- `/sendfile <path>` – Send a file to all peers in the room
+- `/clear` – Clear the chat display (history in memory is untouched)
+
+### Other
+- `/help` – Show CLI command help
+- `/quit` – Exit the application
+
+Some features (like changing identity) are exposed in the GUI (`Logout` button) rather than as CLI commands.
+
+---
+
+## 4. Architecture Overview
+
+- **Transport**: All communication uses UDP datagrams. A custom `NetworkPacket` format is serialised and deserialised in `PacketSerialiser`, with fragmentation for large payloads.
+- **Leader election**: Inside a room, the oldest node (by join time) becomes the key node and is responsible for discovery broadcasts and providing history snapshots.
+- **State & ordering**:
+  - `ChatNode` tracks peers, rooms, Lamport clock, and message history.
+  - Lamport clock is advanced on send and updated on receive, with UUID tie-breaking for deterministic ordering.
+- **Discovery**:
+  - `DiscoveryHandler` periodically broadcasts room info from key nodes and listens for broadcasts to populate the room list.
+  - Manual seeding lets you bootstrap discovery without broadcast.
+- **Reliability**:
+  - Delivery acknowledgements (`MESSAGE_ACK`) update GUI/CLI status.
+  - Heartbeats and timeouts remove dead peers and trigger key node re‑election.
+- **History management**:
+  - History sync uses `MESSAGE_SYNC` and `HISTORY_SNAPSHOT` messages.
+  - Local logs allow reconstructing the chat view even without peers.
+- **File transfer**:
+  - `FileTransfer` payloads are sent as fragmented UDP packets and reassembled by `FragmentAssembler`.
+
+This README reflects the current leader‑based architecture, the latest commands, and removes any older “swarm” or obsolete behaviour that no longer exists in the code.

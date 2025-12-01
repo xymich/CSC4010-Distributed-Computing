@@ -1152,3 +1152,207 @@ A: Fair point! The code uses "leader" loosely to mean "group of peers."
    use cases. Mine is closer to IRC/Discord channel model.
 
 ================================================================================
+
+MINIMUM 10–15 MINUTE DEMO SCRIPT (PRACTICAL WALKTHROUGH)
+================================================================================
+
+This section is a condensed path you can follow live. It assumes:
+- 2–3 terminals or machines
+- `ChatLauncher` compiled into `bin/`
+
+You can skip or shorten steps if time is tight.
+
+--------------------------------------------------------------------------------
+STEP 0: SETUP (BEFORE TIMER STARTS)
+--------------------------------------------------------------------------------
+
+In project root (once):
+  javac -d bin *.java
+
+In each demo terminal:
+  cd bin
+
+Have this command ready in each:
+  java ChatLauncher
+
+--------------------------------------------------------------------------------
+STEP 1: BASIC MESSAGING & IDENTITY (2–3 MINUTES)
+--------------------------------------------------------------------------------
+
+NODE 1 (Michael, GUI):
+  - Run: java ChatLauncher
+  - Choose: 1 (GUI)
+  - Nickname: Michael
+  - Port: 1111
+  - Join network? N (start as seed)
+  - Room name: Lobby
+
+NODE 2 (Joshy, CLI):
+  - Run: java ChatLauncher
+  - Choose: 2 (CLI)
+  - Nickname: Joshy
+  - Port: 2222
+  - Join network? Y
+  - Join discovered Lobby room
+
+DEMO ACTIONS:
+  - Joshy: type "Hello from Joshy" and press Enter
+  - Michael: show message arriving in GUI
+  - Joshy: /status (show UUID + Lamport clock)
+  - Joshy: /peers (show Michael with nickname, possibly [KEY])
+
+WHAT TO SAY (KEY POINTS):
+  - Each node generates a UUID and stores a user-friendly nickname separately.
+  - `PeerInfo` bundles UUID, nickname, IP, port, join time, and key-node flag.
+  - Messages are sent over UDP as serialized `NetworkPacket` objects.
+  - Before sending, the Lamport clock is incremented; on receive it is updated
+    using the max rule, so all nodes see a consistent logical order.
+
+--------------------------------------------------------------------------------
+STEP 2: ROOMS, DISCOVERY, AND ISOLATION (3–4 MINUTES)
+--------------------------------------------------------------------------------
+
+RENAME ROOM AND SHOW DISCOVERY:
+  - On Joshy: /roomname TestRoom   (if key; otherwise do on GUI key node)
+  - On Joshy: /rooms                (see TestRoom discovered)
+
+CREATE A SECOND ROOM:
+  - On Joshy: /disconnect
+  - On Joshy: /newroom
+  - Name: Private
+  - On Joshy (in Private): send "Hi from Private room"
+  - On Michael (still in Lobby): show that this message does NOT appear
+
+WHAT TO SAY (KEY POINTS):
+  - Rooms are logical chat channels, identified internally by UUID, with
+    human-readable names.
+  - `DiscoveryHandler` uses UDP broadcast from key nodes to advertise
+    `RoomInfo` (room ID, name, member count) across the subnet.
+  - `/rooms` lists the rooms discovered from these broadcasts.
+  - Messages are tagged with a room ID, so traffic is isolated per room.
+  - This makes the system more scalable than a single global flood: broadcasts
+    are O(N/R) per room instead of O(N) across all nodes.
+
+--------------------------------------------------------------------------------
+STEP 3: KEY NODE & FAILOVER (2–3 MINUTES)
+--------------------------------------------------------------------------------
+
+SHOW CURRENT KEY NODE:
+  - On Joshy (in some room with at least 2 nodes): /peers
+  - Point at the peer marked [KEY].
+
+SIMULATE KEY NODE FAILURE:
+  - If Michael is [KEY], close the GUI or Ctrl+C the process.
+  - Wait for timeout (~30s) or until logs show key left.
+  - On Joshy: /peers again → a different node should now be [KEY].
+
+WHAT TO SAY (KEY POINTS):
+  - Each room has exactly one key node at a time, chosen by join time
+    (oldest joiner wins, tiebroken by UUID if needed).
+  - Key node responsibilities:
+      * Broadcast room discovery so new nodes can find the room.
+      * Provide history snapshots to joiners.
+  - Heartbeats run every 10 seconds; if a peer (especially the key) stops
+    sending heartbeats, others time it out after ~30 seconds.
+  - When the key node times out, the remaining nodes deterministically elect
+    a new key, so there is no single point of failure.
+
+--------------------------------------------------------------------------------
+STEP 4: HISTORY SYNC & LOCAL REDRAW (3–4 MINUTES)
+--------------------------------------------------------------------------------
+
+ADD THIRD NODE (CHARLIE, CLI):
+  - Run: java ChatLauncher
+  - Nickname: Charlie
+  - Port: 3333
+  - Join network? Y
+  - Join an existing room (e.g. Private)
+
+DEMO ACTIONS:
+  - As soon as Charlie joins, show that previous messages appear immediately
+    (HISTORY_SNAPSHOT applied).
+  - On Joshy: /messages (show history)
+  - On Joshy: /resync (trigger manual rebuild from peers)
+  - On Joshy: /messages again (same ordered history, rebuilt from snapshot)
+  - On Joshy: /clear then /messages (redraw from local memory store)
+
+WHAT TO SAY (KEY POINTS):
+  - On join, a node requests history from peers (usually the key node) via
+    `MESSAGE_SYNC`, and receives a `HISTORY_SNAPSHOT` containing a list of
+    `ChatMessage` objects.
+  - Messages are deduplicated by UUID and merged into local `messageHistory`;
+    the Lamport clock is moved to at least the max timestamp seen.
+  - `/resync` clears and rebuilds local history from peers, useful if a node
+    missed messages under packet loss or after a crash.
+  - `/clear` only clears the display; `/messages` redraws from in-memory
+    history. There is also a local-log-based loader (CLI/GUI) to rebuild
+    history purely from per-node log files without any peers online.
+
+--------------------------------------------------------------------------------
+STEP 5: DELIVERY STATUS & NETWORK LOSS (3–4 MINUTES)
+--------------------------------------------------------------------------------
+
+SHOW DELIVERY STATUS:
+  - On GUI node: send a message → note it appears GREY first (pending), then
+    WHITE when ACK received.
+  - On CLI node: send a message and watch for `[UNCONFIRMED]` if no ACK is
+    received within the timeout.
+
+SIMULATE PACKET LOSS:
+  - On Joshy: /netloss 50
+  - Send several messages from Joshy.
+  - Point out `[Simulated] Dropped outbound packet` logs, grey messages that
+    never turn white, and `[UNCONFIRMED]` tags in CLI.
+  - On Joshy: /netloss 0 (return to normal).
+
+WHAT TO SAY (KEY POINTS):
+  - Each outgoing message is tracked in a pending set until a `MESSAGE_ACK`
+    arrives from at least one peer.
+  - GUI subscribes as `MessageStatusListener` and recolours messages from
+    grey → white on ACK; CLI prints `[UNCONFIRMED]` after a timeout.
+  - `NetworkConditions` injects artificial packet loss for both inbound and
+    outbound directions, letting us test behaviour over unreliable networks.
+  - This clearly demonstrates that we are running on top of UDP and have
+    added our own reliability and feedback mechanisms.
+
+--------------------------------------------------------------------------------
+STEP 6: FILE TRANSFER & ROBOT CHAT (2–3 MINUTES)
+--------------------------------------------------------------------------------
+
+FILE TRANSFER:
+  - Prepare `test.txt` in the project root with some content.
+  - From `bin/` on a CLI node: /sendfile ../test.txt
+  - On a receiving node: show `[FILE RECEIVED] test.txt ...` and confirm the
+    file exists on disk.
+
+ROBOT CHAT (OPTIONAL IF TIME):
+  - On any CLI node: /robot (enable)
+  - Wait a few seconds for automated messages
+  - /robot again (disable)
+
+WHAT TO SAY (KEY POINTS):
+  - `FileTransfer` wraps file metadata (UUID, name, size) and bytes, then the
+    payload is fragmented into safe UDP-sized chunks by `PacketSerialiser`.
+  - `FragmentAssembler` reassembles all fragments using concurrent maps and
+    atomic counters to handle concurrent packet arrival on multiple threads.
+  - Robot mode runs a background thread that periodically sends messages
+    through the same Lamport/ACK pipeline, useful for load and ordering tests.
+
+--------------------------------------------------------------------------------
+STEP 7: CLOSING SUMMARY (30–60 SECONDS)
+--------------------------------------------------------------------------------
+
+SUGGESTED CLOSING POINTS:
+  - Leader‑elected, room‑based P2P over UDP, with a key node per room for
+    discovery and history—no central server.
+  - Lamport clocks and UUIDs provide global ordering and deduplication.
+  - Discovery uses UDP broadcast plus optional manual seeding; rooms provide
+    isolation and scalability.
+  - History is robust: join-time snapshots, manual `/resync`, and local
+    log-based redraw.
+  - Reliability and resilience are visible: ACK-based delivery status,
+    simulated netloss, heartbeats, and automatic key node failover.
+  - Extra features (rooms, file transfer, robot mode, GUI) meet and exceed
+    the assignment’s advanced requirements.
+
+================================================================================
