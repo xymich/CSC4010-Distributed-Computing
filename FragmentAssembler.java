@@ -24,33 +24,20 @@ public class FragmentAssembler {
         }
         
         UUID groupId = fragment.getFragmentGroupId();
-        int fragIndex = fragment.getFragmentIndex();
-        int totalFrags = fragment.getTotalFragments();
-        
-        System.out.println("[FRAG-DEBUG] Received fragment " + (fragIndex + 1) + "/" + totalFrags + " for group " + groupId.toString().substring(0, 8));
         
         // Get or create fragment group
         FragmentGroup group = fragmentGroups.computeIfAbsent(
             groupId, 
-            k -> {
-                System.out.println("[FRAG-DEBUG] New fragment group " + groupId.toString().substring(0, 8) + " expecting " + totalFrags + " fragments");
-                return new FragmentGroup(fragment.getTotalFragments());
-            }
+            k -> new FragmentGroup(fragment.getTotalFragments())
         );
         
         // Add fragment
         group.addFragment(fragment.getFragmentIndex(), fragment);
         
-        int received = group.getReceivedCount();
-        System.out.println("[FRAG-DEBUG] Group " + groupId.toString().substring(0, 8) + " progress: " + received + "/" + totalFrags);
-        
         // Check if complete
         if (group.isComplete()) {
-            System.out.println("[FRAG-DEBUG] Group " + groupId.toString().substring(0, 8) + " COMPLETE! Assembling...");
             fragmentGroups.remove(groupId);
-            NetworkPacket assembled = group.assemble();
-            System.out.println("[FRAG-DEBUG] Assembly successful, type: " + assembled.getType());
-            return assembled;
+            return group.assemble();
         }
         
         return null; // Still waiting for more fragments
@@ -91,10 +78,6 @@ public class FragmentAssembler {
         
         public boolean isComplete() {
             return receivedCount.get() >= totalFragments;
-        }
-        
-        public int getReceivedCount() {
-            return receivedCount.get();
         }
         
         public long getFirstReceived() {

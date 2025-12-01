@@ -281,18 +281,6 @@ public class ChatNode {
             return false;
         }
         
-        System.out.println("[FILE-DEBUG] === SENDING FILE ===");
-        System.out.println("[FILE-DEBUG] File: " + fileName + " (" + data.length + " bytes)");
-        System.out.println("[FILE-DEBUG] Leader peers count: " + leaderPeers.size());
-        System.out.println("[FILE-DEBUG] Key node peers count: " + keyNodePeers.size());
-        
-        for (UUID peerId : leaderPeers) {
-            PeerInfo peer = knownPeers.get(peerId);
-            if (peer != null) {
-                System.out.println("[FILE-DEBUG] Leader peer: " + peer.getNickname() + " @ " + peer.getIpAddress() + ":" + peer.getPort());
-            }
-        }
-        
         FileTransfer transfer = new FileTransfer(
             UUID.randomUUID(),
             fileName,
@@ -300,7 +288,6 @@ public class ChatNode {
             data,
             nickname
         );
-        System.out.println("[FILE-DEBUG] FileTransfer ID: " + transfer.getFileId());
 
         NetworkPacket packet = new NetworkPacket(
             MessageType.FILE_TRANSFER,
@@ -312,7 +299,6 @@ public class ChatNode {
 
         broadcastToLeader(packet);
         broadcastToKeyNodes(packet);
-        System.out.println("[FILE-DEBUG] Broadcast complete");
         System.out.println("Broadcasting file '" + fileName + "' to leader peers...");
         return true;
     }
@@ -751,15 +737,6 @@ public class ChatNode {
      */
     private void handleIncomingPacket(NetworkPacket packet, String senderAddress, int senderPort) {
         try {
-            // Debug: log incoming packet type
-            if (packet.isFragmented()) {
-                System.out.println("[RECV-DEBUG] Fragment received from " + senderAddress + ":" + senderPort + 
-                    " - index " + packet.getFragmentIndex() + "/" + packet.getTotalFragments() +
-                    " group " + packet.getFragmentGroupId().toString().substring(0, 8));
-            } else if (packet.getType() == MessageType.FILE_TRANSFER) {
-                System.out.println("[RECV-DEBUG] Non-fragmented FILE_TRANSFER from " + senderAddress + ":" + senderPort);
-            }
-            
             // Handle fragmented packets
             NetworkPacket completePacket = fragmentAssembler.addFragment(packet);
             if (completePacket == null) {
@@ -965,25 +942,15 @@ public class ChatNode {
     }
 
     private void handleFileTransfer(NetworkPacket packet) {
-        System.out.println("[FILE-DEBUG] === RECEIVED FILE TRANSFER ===");
-        System.out.println("[FILE-DEBUG] From: " + packet.getSenderNickname() + " (" + packet.getSenderId() + ")");
-        
         FileTransfer transfer = (FileTransfer) packet.getPayload();
         if (transfer == null || transfer.getData() == null) {
-            System.out.println("[FILE-DEBUG] ERROR: Invalid file transfer payload (null)");
             System.out.println("Received invalid file transfer payload.");
             return;
         }
-        
-        System.out.println("[FILE-DEBUG] File: " + transfer.getFileName() + " (" + transfer.getFileSize() + " bytes)");
-        System.out.println("[FILE-DEBUG] FileTransfer ID: " + transfer.getFileId());
-        System.out.println("[FILE-DEBUG] Data length: " + (transfer.getData() != null ? transfer.getData().length : "null"));
 
         if (!receivedFileIds.add(transfer.getFileId())) {
-            System.out.println("[FILE-DEBUG] Already processed this file, skipping");
             return; // already processed
         }
-        System.out.println("[FILE-DEBUG] New file, processing...");
 
         try {
             Path downloadDir = Paths.get("downloads", nickname.replaceAll("[^A-Za-z0-9_-]", "_"));

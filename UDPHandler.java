@@ -74,17 +74,6 @@ public class UDPHandler {
     public void send(NetworkPacket packet, String address, int port) throws IOException {
         byte[] data = PacketSerialiser.serialize(packet);
         
-        // Log actual packet sizes for debugging
-        if (packet.isFragmented() || packet.getType() == MessageType.FILE_TRANSFER) {
-            System.out.println("[SIZE-DEBUG] Sending packet: " + data.length + " bytes (type: " + 
-                (packet.isFragmented() ? "FRAGMENT" : packet.getType()) + ") to " + address + ":" + port);
-        }
-        
-        // Warn if packet is suspiciously large
-        if (data.length > 1400) {
-            System.out.println("[SIZE-DEBUG] WARNING: Packet size " + data.length + " exceeds safe UDP threshold!");
-        }
-        
         // Only check size for non-fragmented packets
         // Fragmented packets are already split and should be sent as-is
         if (!packet.isFragmented() && data.length > PacketSerialiser.MAX_PACKET_SIZE) {
@@ -108,19 +97,8 @@ public class UDPHandler {
     public void sendWithFragmentation(NetworkPacket packet, String address, int port) throws IOException {
         var fragments = PacketSerialiser.fragment(packet);
         
-        if (packet.getType() == MessageType.FILE_TRANSFER || fragments.size() > 1) {
-            System.out.println("[FRAG-DEBUG] Sending " + packet.getType() + " to " + address + ":" + port);
-            System.out.println("[FRAG-DEBUG] Total fragments: " + fragments.size());
-        }
-        
-        int sentCount = 0;
         for (NetworkPacket fragment : fragments) {
             send(fragment, address, port);
-            sentCount++;
-            
-            if (fragments.size() > 1 && (sentCount % 10 == 0 || sentCount == fragments.size())) {
-                System.out.println("[FRAG-DEBUG] Sent fragment " + sentCount + "/" + fragments.size() + " to " + address + ":" + port);
-            }
             
             // Small delay between fragments to avoid overwhelming receiver
             if (fragments.size() > 1) {
@@ -131,30 +109,18 @@ public class UDPHandler {
                 }
             }
         }
-        
-        if (fragments.size() > 1) {
-            System.out.println("[FRAG-DEBUG] All " + fragments.size() + " fragments sent to " + address + ":" + port);
-        }
     }
     
     /**
      * Broadcast a packet to multiple peers
      */
     public void broadcast(NetworkPacket packet, Iterable<PeerInfo> peers) {
-        int peerCount = 0;
         for (PeerInfo peer : peers) {
-            peerCount++;
-            if (packet.getType() == MessageType.FILE_TRANSFER) {
-                System.out.println("[BROADCAST-DEBUG] Sending " + packet.getType() + " to peer: " + peer.getNickname() + " @ " + peer.getIpAddress() + ":" + peer.getPort());
-            }
             try {
                 sendWithFragmentation(packet, peer.getIpAddress(), peer.getPort());
             } catch (IOException e) {
                 System.err.println("Failed to send to " + peer.getNickname() + ": " + e.getMessage());
             }
-        }
-        if (packet.getType() == MessageType.FILE_TRANSFER && peerCount == 0) {
-            System.out.println("[BROADCAST-DEBUG] WARNING: No peers to broadcast FILE_TRANSFER to!");
         }
     }
     
@@ -183,9 +149,6 @@ public class UDPHandler {
                 }
                 
                 // Handle packet in thread pool
-                if (data.length > 1000) {
-                    System.out.println("[UDP-DEBUG] Received large packet (" + data.length + " bytes) from " + senderAddress + ":" + senderPort);
-                }
                 executorService.submit(() -> handleReceivedPacket(data, senderAddress, senderPort));
                 
             } catch (SocketException e) {

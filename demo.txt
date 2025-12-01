@@ -1356,3 +1356,73 @@ SUGGESTED CLOSING POINTS:
     the assignment’s advanced requirements.
 
 ================================================================================
+
+EXTRA: HTTP BROADCAST API (EXTERNAL INTERFACE)
+================================================================================
+
+This is an optional “wow factor” feature that exposes a simple HTTP API which
+can inject messages into any running chat room from external tools (scripts,
+CI jobs, web dashboards, etc.). It runs as its own node that joins the P2P
+network and broadcasts messages like a normal user.
+
+HOW TO RUN (BEFORE DEMO OR NEAR THE END):
+  1. In project root, compile as usual:
+       javac -d bin *.java
+  2. In a new terminal:
+       cd bin
+       java BroadcastService
+  3. Follow prompts:
+       - Nickname (e.g. AdminBot)
+       - IP and chat port to use (must be reachable by the other nodes)
+       - HTTP port to listen on (e.g. 8080)
+       - Optionally, join an existing room via a seed node.
+
+KEY IDEA TO EXPLAIN:
+  - `BroadcastService` starts a normal `ChatNode` (e.g. AdminBot) and then
+    attaches a very small HTTP server (`com.sun.net.httpserver.HttpServer`).
+  - HTTP clients send requests like `/message?text=Hello` and the service
+    calls `sendChatMessage` on its node, so the message appears in the room
+    just like a normal user message.
+
+MAIN ENDPOINTS (DEFAULT PATHS):
+  - `GET /message?text=...`
+      Broadcasts the given text into the joined room.
+      Returns JSON: `{ "success": true, "message": "...", "peers": N }`.
+
+  - `POST /message`
+      Reads raw request body as the message text and broadcasts it.
+
+  - `GET /status`
+      Returns JSON with node nickname, nodeId, room info, whether it is a
+      key node, Lamport clock, and peer count.
+
+  - `GET /peers`
+      Returns JSON listing known peers (nickname, nodeId, address, key-node
+      flag) plus a total count.
+
+SIMPLE DEMO FLOW (2–3 MINUTES, OPTIONAL):
+  1. Make sure at least one normal chat room is running (e.g. Lobby with
+     Michael and Joshy connected as in earlier steps).
+  2. Start `BroadcastService` and join the same room.
+  3. From a browser on the same machine, visit:
+       http://localhost:8080/message?text=Hello%20from%20HTTP
+     Show that a new message appears in the chat from AdminBot.
+  4. In the browser, visit:
+       http://localhost:8080/status
+     and briefly show the JSON status (nickname, nodeId, room, peers,
+     Lamport clock) to prove this is a real node in the P2P network.
+  5. (Optional) Call `/message` from a script or curl to emphasise that any
+     external tool can drive the chat:
+       curl "http://localhost:8080/message?text=Build+completed"
+
+WHAT TO SAY (KEY POINTS):
+  - This HTTP service is a thin wrapper around the existing `ChatNode` – it
+    doesn’t change the P2P protocol, it just provides an external interface
+    for other systems to send messages.
+  - Because it joins the network like any other peer, messages still go over
+    UDP, use Lamport clocks, and appear in history and logs as normal.
+  - This could be used by bots (e.g. monitoring alerts, CI pipelines) to
+    push notifications into the chat without needing to speak the custom UDP
+    protocol directly.
+
+================================================================================
