@@ -2,7 +2,7 @@ import java.util.Scanner;
 
 /**
  * Main launcher for P2P Chat application.
- * Allows user to choose between GUI (JavaFX) or CLI mode at startup.
+ * Allows user to choose between GUI (JavaSwing) or CLI mode at startup.
  */
 public class ChatLauncher {
 
@@ -23,9 +23,9 @@ public class ChatLauncher {
         }
 
         // Interactive mode selection
-        System.out.println("===========================================");
+        System.out.println("ooooooooooooooooooooooooooooooooooooooooooo");
         System.out.println("       P2P Distributed Chat System         ");
-        System.out.println("===========================================");
+        System.out.println("ooooooooooooooooooooooooooooooooooooooooooo");
         System.out.println();
         System.out.println("Select interface mode:");
         System.out.println("  1. GUI (Graphical - Skype-style interface)");

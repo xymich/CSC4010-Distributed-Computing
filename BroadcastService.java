@@ -10,22 +10,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
 
-/**
- * Simple HTTP service that broadcasts messages to the P2P chat network.
- * 
- * Usage:
- *   java BroadcastService
- * 
- * API Endpoints:
- *   GET  /message?text=Hello     - Broadcast a message
- *   POST /message                - Broadcast message from body (text/plain)
- *   GET  /status                 - Check service status
- *   GET  /peers                  - List connected peers
- * 
- * Example:
- *   curl "http://localhost:8080/message?text=Hello%20World"
- *   curl -X POST -d "Hello World" http://localhost:8080/message
- */
 public class BroadcastService {
     
     private static ChatNode node;

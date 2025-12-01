@@ -7,13 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.swing.*;
 import javax.swing.text.*;
 
-/**
- * Swing-based GUI for P2P Chat with old Skype-inspired dark theme.
- * Place a 'logo.png' file in the application directory to display a custom logo.
- */
 public class ChatGUI extends JFrame implements MessageStatusListener {
-
-    // ===== THEME COLORS (Old Skype inspired) =====
     private static final Color SKYPE_BLUE = new Color(0, 175, 240);
     private static final Color SKYPE_DARK_BLUE = new Color(0, 120, 212);
     private static final Color SIDEBAR_BG = new Color(45, 45, 45);
@@ -21,7 +15,7 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
     private static final Color INPUT_BG = new Color(51, 51, 51);
     private static final Color TEXT_COLOR = Color.WHITE;
     private static final Color TEXT_MUTED = new Color(170, 170, 170);
-    private static final Color TEXT_PENDING = new Color(128, 128, 128);  // Grey for pending messages
+    private static final Color TEXT_PENDING = new Color(128, 128, 128); 
     private static final long MAX_FILE_BYTES = 2 * 1024 * 1024;
 
     // ===== STATE =====

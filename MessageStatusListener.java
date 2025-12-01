@@ -1,9 +1,5 @@
 import java.util.UUID;
 
-/**
- * Listener interface for message delivery status updates.
- * Used to notify UI components when messages are confirmed delivered.
- */
 public interface MessageStatusListener {
     
     /**
