@@ -14,8 +14,8 @@ public enum MessageType implements Serializable {
     FRAGMENT,           // Fragment of larger message
     FRAGMENT_ACK,       // Acknowledgment of fragment
     KEY_NODE_ANNOUNCE,  // Key node announcing itself
-    KEY_NODE_LIST,      // List of key nodes from other swarms
+    KEY_NODE_LIST,      // List of key nodes from other leaders
     KEY_NODE_REQUEST,   // Request for key node list
     FILE_TRANSFER,      // Broadcast file data
-    SWARM_RELOCATE      // Key node instructs swarm to follow
+    LEADER_RELOCATE     // Key node instructs leader to follow
 }

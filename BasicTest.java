@@ -28,7 +28,7 @@ public class BasicTest {
         System.out.println("Test 3: Adding peer to node");
         node1.addPeer(peer1);
         System.out.println("Known peers: " + node1.getAllPeers().size());
-        System.out.println("Swarm peers: " + node1.getSwarmPeers().size());
+        System.out.println("Leader peers: " + node1.getLeaderPeers().size());
         System.out.println(":) Peer added successfully\n");
         
         // Test 4: Create and add ChatMessage
@@ -76,9 +76,9 @@ public class BasicTest {
         }
         System.out.println(":) Messages ordered correctly\n");
         
-        // Test 7: Swarm key node
-        System.out.println("Test 7: Testing swarm key node");
-        node1.setSwarmKey(true);
+        // Test 7: Leader key node
+        System.out.println("Test 7: Testing leader key node");
+        node1.setLeaderKey(true);
         System.out.println(node1);
         
         PeerInfo keyPeer = new PeerInfo(
@@ -86,16 +86,16 @@ public class BasicTest {
             "Charlie",
             "192.168.1.12",
             5002,
-            1  // Different swarm
+            1  // Different leader
         );
-        keyPeer.setSwarmKey(true);
+        keyPeer.setLeaderKey(true);
         node1.addPeer(keyPeer);
         
         System.out.println("Key node peers: " + node1.getKeyNodePeers().size());
         for (PeerInfo p : node1.getKeyNodePeers()) {
             System.out.println("  " + p);
         }
-        System.out.println(":) Swarm key node working\n");
+        System.out.println(":) Leader key node working\n");
         
         // Test 8: Message deduplication
         System.out.println("Test 8: Testing message deduplication");

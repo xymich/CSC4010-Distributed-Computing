@@ -57,22 +57,27 @@ public class FragmentAssembler {
      * Inner class to hold a group of fragments
      */
     private static class FragmentGroup {
-        private Map<Integer, NetworkPacket> fragments;
-        private int totalFragments;
-        private long firstReceived;
+        private final java.util.concurrent.ConcurrentMap<Integer, NetworkPacket> fragments;
+        private final java.util.concurrent.atomic.AtomicInteger receivedCount;
+        private final int totalFragments;
+        private final long firstReceived;
         
         public FragmentGroup(int totalFragments) {
-            this.fragments = new HashMap<>();
+            this.fragments = new java.util.concurrent.ConcurrentHashMap<>();
+            this.receivedCount = new java.util.concurrent.atomic.AtomicInteger();
             this.totalFragments = totalFragments;
             this.firstReceived = System.currentTimeMillis();
         }
         
         public void addFragment(int index, NetworkPacket fragment) {
-            fragments.put(index, fragment);
+            NetworkPacket existing = fragments.putIfAbsent(index, fragment);
+            if (existing == null) {
+                receivedCount.incrementAndGet();
+            }
         }
         
         public boolean isComplete() {
-            return fragments.size() == totalFragments;
+            return receivedCount.get() >= totalFragments;
         }
         
         public long getFirstReceived() {

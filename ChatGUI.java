@@ -299,6 +299,10 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         resyncBtn.setMaximumSize(new Dimension(200, 30));
         resyncBtn.addActionListener(e -> resyncHistory());
 
+        JButton resyncLocalBtn = createButton("Load Local Log", false);
+        resyncLocalBtn.setMaximumSize(new Dimension(200, 30));
+        resyncLocalBtn.addActionListener(e -> loadLocalHistory());
+
         JButton sendFileBtn = createButton("Send File", false);
         sendFileBtn.setMaximumSize(new Dimension(200, 30));
         sendFileBtn.addActionListener(e -> sendFile());
@@ -339,6 +343,8 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         sidebar.add(refreshBtn);
         sidebar.add(Box.createVerticalGlue());
         sidebar.add(resyncBtn);
+        sidebar.add(Box.createVerticalStrut(5));
+        sidebar.add(resyncLocalBtn);
         sidebar.add(Box.createVerticalStrut(5));
         sidebar.add(sendFileBtn);
         sidebar.add(Box.createVerticalStrut(5));
@@ -895,6 +901,37 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
         }
     }
 
+    private void loadLocalHistory() {
+        if (node == null) {
+            appendChat("[System] Node not initialized.", TEXT_MUTED);
+            return;
+        }
+        boolean success = node.loadHistoryFromLocalLog();
+        if (success) {
+            redrawChatFromHistory();
+            appendChat("[System] Reloaded chat history from local log.", SKYPE_BLUE);
+        } else {
+            appendChat("[System] Local log unavailable or empty.", TEXT_MUTED);
+        }
+    }
+
+    private void redrawChatFromHistory() {
+        SwingUtilities.invokeLater(() -> {
+            StyledDocument doc = chatPane.getStyledDocument();
+            try {
+                doc.remove(0, doc.getLength());
+                SimpleAttributeSet attrs = new SimpleAttributeSet();
+                StyleConstants.setForeground(attrs, TEXT_COLOR);
+                for (var msg : node.getAllMessages()) {
+                    doc.insertString(doc.getLength(), msg.toString() + "\n", attrs);
+                }
+                chatPane.setCaretPosition(doc.getLength());
+            } catch (BadLocationException e) {
+                // Ignore redraw errors
+            }
+        });
+    }
+
     private void sendFile() {
         if (node == null || !node.isRunning()) {
             appendChat("[System] Connect to a room first.", TEXT_MUTED);
@@ -972,7 +1009,7 @@ public class ChatGUI extends JFrame implements MessageStatusListener {
             peerListModel.clear();
             for (var peer : node.getAllPeers()) {
                 String display = peer.getNickname();
-                if (peer.isSwarmKey()) display += " [KEY]";
+                if (peer.isLeaderKey()) display += " [KEY]";
                 peerListModel.addElement(display);
             }
         });

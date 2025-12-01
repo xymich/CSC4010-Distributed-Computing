@@ -8,18 +8,18 @@ public class PeerInfo implements Serializable {
     private String ipAddress;
     private int port;
     private long lastSeen;
-    private int swarmId;
-    private boolean isSwarmKey;
+    private int leaderId;
+    private boolean isLeaderKey;
     private long joinTime;  // NEW: Track when peer joined
     
-    public PeerInfo(UUID nodeId, String nickname, String ipAddress, int port, int swarmId) {
+    public PeerInfo(UUID nodeId, String nickname, String ipAddress, int port, int leaderId) {
         this.nodeId = nodeId;
         this.nickname = nickname;
         this.ipAddress = ipAddress;
         this.port = port;
-        this.swarmId = swarmId;
+        this.leaderId = leaderId;
         this.lastSeen = System.currentTimeMillis();
-        this.isSwarmKey = false;
+        this.isLeaderKey = false;
         this.joinTime = System.currentTimeMillis();
     }
     
@@ -29,14 +29,14 @@ public class PeerInfo implements Serializable {
     public String getIpAddress() { return ipAddress; }
     public int getPort() { return port; }
     public long getLastSeen() { return lastSeen; }
-    public int getSwarmId() { return swarmId; }
-    public boolean isSwarmKey() { return isSwarmKey; }
+    public int getLeaderId() { return leaderId; }
+    public boolean isLeaderKey() { return isLeaderKey; }
     public long getJoinTime() { return joinTime; }
     
     // Setters
     public void setLastSeen(long lastSeen) { this.lastSeen = lastSeen; }
-    public void setSwarmId(int swarmId) { this.swarmId = swarmId; }
-    public void setSwarmKey(boolean isSwarmKey) { this.isSwarmKey = isSwarmKey; }
+    public void setLeaderId(int leaderId) { this.leaderId = leaderId; }
+    public void setLeaderKey(boolean isLeaderKey) { this.isLeaderKey = isLeaderKey; }
     public void setJoinTime(long joinTime) { this.joinTime = joinTime; }
     
     public void updateLastSeen() {
@@ -45,9 +45,9 @@ public class PeerInfo implements Serializable {
     
     @Override
     public String toString() {
-        String keyStatus = isSwarmKey ? " [KEY]" : "";
+        String keyStatus = isLeaderKey ? " [KEY]" : "";
         return nickname + " (" + nodeId.toString().substring(0, 8) + "...) @ " 
-               + ipAddress + ":" + port + " [Swarm " + swarmId + "]" + keyStatus;
+               + ipAddress + ":" + port + " [Leader " + leaderId + "]" + keyStatus;
     }
     
     @Override

@@ -34,7 +34,7 @@ INTERMEDIATE REQUIREMENTS:
 [✓] New node receives all current chat data (history sync)
 [✓] Automated "robot" chat option (/robot command)
 [✓] Handle malformed data gracefully (try-catch on deserialize)
-[✓] True peer-to-peer network (swarm/key node architecture)
+[✓] True peer-to-peer network (leader/key node architecture)
 [✓] Simulate failure - unreliable network (/netloss command)
 
 ADVANCED REQUIREMENTS:
@@ -47,7 +47,7 @@ ADVANCED REQUIREMENTS:
 [✓] External interface (GUI - Swing-based graphical interface separate from CLI)
 
 ADDITIONAL MARKS:
-[✓] Design quality - swarm-based architecture with key nodes
+[✓] Design quality - leader-based architecture with key nodes
 [✓] Wow factor - chat rooms, room renaming, message delivery status
 
 ================================================================================
@@ -257,7 +257,7 @@ PREPARATION: Create test.txt with content "Hello this is a test file!"
 
 DEMO ACTIONS (CLI):
   1. Node1: /sendfile test.txt
-  2. Observe: "Broadcasting file 'test.txt' to swarm peers..."
+  2. Observe: "Broadcasting file 'test.txt' to leader peers..."
   3. Node2: See "[FILE RECEIVED] test.txt from Node1 (XX bytes)"
   4. Node2: Check current directory - file saved as test.txt
 
@@ -309,7 +309,7 @@ DEMO ACTIONS:
   2. If Michael is KEY: force close Michael's terminal
   3. Wait for timeout
   4. Joshy & Charlie: See "Key node left, finding replacement..."
-  5. One of them: "Becoming swarm key node"
+  5. One of them: "Becoming leader key node"
   6. Network continues operating!
   7. New key node now handles room discovery broadcast
 
@@ -374,7 +374,7 @@ OTHER:
 ARCHITECTURE SUMMARY (for design discussion)
 ================================================================================
 
-1. LEADER-ELECTED ROOM-BASED P2P (not "swarm" in BitTorrent sense)
+1. LEADER-ELECTED ROOM-BASED P2P (not "leader" in BitTorrent sense)
    
    What it IS:
    - Nodes grouped into "rooms" (chat channels)
@@ -384,7 +384,7 @@ ARCHITECTURE SUMMARY (for design discussion)
    - Automatic leader election on key node failure
    
    What it is NOT:
-   - Not a BitTorrent-style swarm (no content chunks, no tracker)
+   - Not a BitTorrent-style leader (no content chunks, no tracker)
    - Not pure flat P2P (has temporary leadership for efficiency)
    - Not client-server (leader failure = election, not total failure)
    
@@ -452,7 +452,7 @@ HOW IT WORKS:
   - Each node generates a UUID on creation: this.nodeId = UUID.randomUUID()
   - UUID is a 128-bit universally unique identifier (virtually impossible to duplicate)
   - The nickname is user-provided and stored separately
-  - PeerInfo object bundles: nodeId, nickname, ipAddress, port, swarmId, isKeyNode, joinTime
+  - PeerInfo object bundles: nodeId, nickname, ipAddress, port, leaderId, isKeyNode, joinTime
 
 WHY UUID?
   - UUIDs are generated locally without coordination (no central server needed)
@@ -554,7 +554,7 @@ WHY UDP NOT TCP?
 
 PACKET TYPES (MessageType enum):
   - CHAT_MESSAGE: Regular chat message
-  - JOIN_REQUEST: Node wants to join swarm
+  - JOIN_REQUEST: Node wants to join leader
   - PEER_LIST: List of known peers (for discovery)
   - HEARTBEAT: "I'm still alive" signal
   - MESSAGE_ACK: Delivery confirmation
@@ -630,10 +630,10 @@ POTENTIAL QUESTIONS:
 TOPIC 5: LEADER-ELECTED ROOM ARCHITECTURE & KEY NODES
 --------------------------------------------------------------------------------
 
-FILES: SwarmManager.java, ChatNode.java
+FILES: LeaderManager.java, ChatNode.java
 
 TERMINOLOGY CLARIFICATION:
-  - Code uses "swarm" but this is NOT a BitTorrent-style swarm
+  - Code uses "leader" but this is NOT a BitTorrent-style leader
   - More accurately: "Leader-Elected Room-Based P2P"
   - Each room has a dynamically elected leader (key node)
   - Similar to: IRC channels, Discord servers, Pub/Sub topics
@@ -641,7 +641,7 @@ TERMINOLOGY CLARIFICATION:
 HOW IT WORKS:
 
   ROOM = GROUP OF PEERS:
-  - Each room has unique swarmId (derived from roomId.hashCode())
+  - Each room has unique leaderId (derived from roomId.hashCode())
   - Nodes in same room share messages directly (full mesh within room)
   - Messages are isolated per room (room partitioning)
 
@@ -649,7 +649,7 @@ HOW IT WORKS:
   - Oldest node in room becomes key node (leader)
   - "Oldest" = earliest joinTime (refreshed on room changes)
   - On join, node compares joinTime with all peers
-  - checkKeyNodeStatus() in SwarmManager handles election
+  - checkKeyNodeStatus() in LeaderManager handles election
   - This is deterministic: all nodes compute same result independently
 
   KEY NODE RESPONSIBILITIES:
@@ -660,14 +660,14 @@ HOW IT WORKS:
   FAILOVER (Leader Re-election):
   - Heartbeats detect key node failure (30 sec timeout)
   - Remaining nodes run election: oldest becomes new key
-  - ">>> Becoming swarm key node" logged on promotion
+  - ">>> Becoming leader key node" logged on promotion
   - Network continues without interruption
 
   CODE FLOW FOR ELECTION:
   1. Peer timeout detected: handlePeerTimeout()
-  2. If timed-out peer was key: swarmManager.handleKeyNodeLeft()
-  3. SwarmManager.checkKeyNodeStatus() compares joinTimes
-  4. Oldest calls becomeKeyNode() -> node.setSwarmKey(true)
+  2. If timed-out peer was key: leaderManager.handleKeyNodeLeft()
+  3. LeaderManager.checkKeyNodeStatus() compares joinTimes
+  4. Oldest calls becomeKeyNode() -> node.setLeaderKey(true)
 
 WHY THIS IS MORE SCALABLE THAN FULL-MESH:
   - Full mesh: Every node broadcasts to ALL nodes (O(N) per message)
@@ -700,8 +700,8 @@ POTENTIAL QUESTIONS:
   A: No! If key fails, a new key is elected automatically. The "single"
      key is for efficiency (one broadcaster), not reliability.
 
-  Q: "How does this compare to BitTorrent swarms?"
-  A: BitTorrent swarms are about sharing file CHUNKS from multiple peers.
+  Q: "How does this compare to BitTorrent leaders?"
+  A: BitTorrent leaders are about sharing file CHUNKS from multiple peers.
      Your rooms are about sharing MESSAGES in isolated groups.
      Both are P2P, but different use cases and topology.
 
@@ -716,7 +716,7 @@ HOW IT WORKS:
   SENDING:
   1. sendChatMessage() creates ChatMessage with UUID
   2. If peers exist, add messageId to pendingMessages set
-  3. Broadcast to all swarm peers
+  3. Broadcast to all leader peers
   4. GUI shows message in GREY (pending)
 
   RECEIVING (other node):
@@ -816,7 +816,7 @@ HOW IT WORKS:
   SENDING HEARTBEATS:
   - Timer fires every HEARTBEAT_INTERVAL_MS (10 seconds)
   - Broadcasts HEARTBEAT packet to all known peers
-  - Heartbeat contains: nodeId, nickname, swarmId, clock
+  - Heartbeat contains: nodeId, nickname, leaderId, clock
 
   RECEIVING HEARTBEATS:
   - handleHeartbeat() updates peer's lastSeen timestamp
@@ -826,7 +826,7 @@ HOW IT WORKS:
   TIMEOUT DETECTION:
   - checkPeerTimeouts() runs periodically
   - If now - peer.lastSeen > PEER_TIMEOUT_MS (30 sec): peer is dead
-  - Removes peer from knownPeers, swarmPeers
+  - Removes peer from knownPeers, leaderPeers
   - If dead peer was key node: triggers election
 
   GRACEFUL VS UNGRACEFUL:
@@ -867,7 +867,7 @@ HOW IT WORKS:
   3. Create FileTransfer object: fileId (UUID), fileName, fileSize, data, sender
   4. Wrap in NetworkPacket with type FILE_TRANSFER
   5. sendWithFragmentation() breaks into UDP-safe chunks
-  6. Broadcast to all swarm peers
+  6. Broadcast to all leader peers
 
   RECEIVING:
   1. handleFileTransfer() extracts FileTransfer from packet
@@ -961,7 +961,7 @@ HOW IT WORKS:
   CONCURRENT DATA STRUCTURES:
   - ConcurrentHashMap<UUID, PeerInfo> knownPeers
   - ConcurrentHashMap<UUID, ChatMessage> messageHistory  
-  - ConcurrentHashMap.newKeySet() for swarmPeers, keyNodePeers
+  - ConcurrentHashMap.newKeySet() for leaderPeers, keyNodePeers
   - ConcurrentLinkedQueue for deferredPackets
   - AtomicLong for lamportClock
 
@@ -1050,7 +1050,7 @@ A: 1. User types message, hits enter
    4. NetworkPacket created with CHAT_MESSAGE type
    5. Packet serialized to bytes via ObjectOutputStream
    6. If >8KB, fragmented into chunks
-   7. Each chunk sent via UDP to all swarm peers
+   7. Each chunk sent via UDP to all leader peers
    8. Message shown in grey (pending) in GUI
    9. Recipients deserialize, check UUID for duplicates
    10. Recipients update their Lamport clock (max rule)
@@ -1074,7 +1074,7 @@ Q: "What happens if the key node crashes?"
 
 A: 1. Other nodes stop receiving heartbeats from key
    2. After 30 seconds, they timeout the key node
-   3. SwarmManager.handleKeyNodeLeft() triggers
+   3. LeaderManager.handleKeyNodeLeft() triggers
    4. Remaining nodes compare joinTimes
    5. Node with earliest joinTime becomes new key
    6. New key starts broadcasting room discovery
@@ -1141,11 +1141,11 @@ A: Yes! Full-mesh requires O(N²) connections and O(N) messages per broadcast.
 
 ---
 
-Q: "Why do you call it 'swarm' in the code but it's not BitTorrent-style?"
+Q: "Why do you call it 'leader' in the code but it's not BitTorrent-style?"
 
-A: Fair point! The code uses "swarm" loosely to mean "group of peers."
+A: Fair point! The code uses "leader" loosely to mean "group of peers."
    More accurately, it's "Leader-Elected Room-Based P2P":
-   - BitTorrent swarms: peers sharing file CHUNKS, no leader, tracker-based
+   - BitTorrent leaders: peers sharing file CHUNKS, no leader, tracker-based
    - My rooms: peers sharing MESSAGES, elected leader, broadcast discovery
    
    Both are valid P2P architectures, just different patterns for different

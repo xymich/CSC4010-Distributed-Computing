@@ -374,6 +374,7 @@ public class SimpleChatClient implements MessageStatusListener {
         System.out.println("/reconnect      - Reconnect to a network");
         System.out.println("/roomname <name> - Rename your room");
         System.out.println("/resync         - Rebuild chat history from peers");
+        System.out.println("/resynclocal    - Reload chat history from local log file");
         System.out.println("/sendfile <path> - Broadcast a file to the room");
         System.out.println("/clear          - Clear the local console view");
         System.out.println("/seed <ip> <port> - Add a remote discovery seed (unicast)");
@@ -483,6 +484,9 @@ public class SimpleChatClient implements MessageStatusListener {
             case "/resync":
                 rebuildHistory();
                 break;
+            case "/resynclocal":
+                reloadHistoryFromLog();
+                break;
             case "/seed":
                 addDiscoverySeed(parts.length > 1 ? parts[1].trim() : "");
                 break;
@@ -567,7 +571,7 @@ public class SimpleChatClient implements MessageStatusListener {
         System.out.println("Running: " + node.isRunning());
         System.out.println("Lamport Clock: " + node.getClock());
         System.out.println("Total Peers: " + node.getAllPeers().size());
-        System.out.println("Swarm Peers: " + node.getSwarmPeers().size());
+        System.out.println("Leader Peers: " + node.getLeaderPeers().size());
         System.out.println("Key Node Peers: " + node.getKeyNodePeers().size());
         System.out.println("Messages: " + node.getAllMessages().size());
         System.out.println();
@@ -780,6 +784,20 @@ public class SimpleChatClient implements MessageStatusListener {
             System.out.println("Requested chat history from peers. Messages will repopulate shortly.");
         } else {
             System.out.println("No peers available to rebuild history right now.");
+        }
+    }
+
+    private static void reloadHistoryFromLog() {
+        if (node == null) {
+            System.out.println("Error: Node not initialized.");
+            return;
+        }
+        boolean success = node.loadHistoryFromLocalLog();
+        if (success) {
+            System.out.println("Reloaded chat history from local log.");
+            showMessages();
+        } else {
+            System.out.println("Failed to reload local history (log missing or empty).");
         }
     }
 

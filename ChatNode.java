@@ -22,17 +22,17 @@ public class ChatNode {
     private UUID roomId;
     private String roomName;
     
-    // Swarm management
-    private int swarmId;
-    private boolean isSwarmKey;
+    // Leader management
+    private int leaderId;
+    private boolean isLeaderKey;
     
     // Lamport clock
     private AtomicLong lamportClock;
     
     // Peer management - using thread-safe collections
     private Map<UUID, PeerInfo> knownPeers;
-    private Set<UUID> swarmPeers;      // Peers in same swarm
-    private Set<UUID> keyNodePeers;    // Key nodes from other swarms
+    private Set<UUID> leaderPeers;      // Peers in same leader
+    private Set<UUID> keyNodePeers;    // Key nodes from other leaders
     private Set<UUID> receivedFileIds;
     
     // Message storage - using thread-safe collection
@@ -56,7 +56,7 @@ public class ChatNode {
     private UDPHandler udpHandler;
     private FragmentAssembler fragmentAssembler;
     private DiscoveryHandler discoveryHandler;
-    private SwarmManager swarmManager;
+    private LeaderGroupManager leaderManager;
     private boolean running;
     
     // Join time tracking
@@ -77,13 +77,13 @@ public class ChatNode {
         this.roomId = UUID.randomUUID();
         this.roomName = roomName;
         
-        this.swarmId = deriveSwarmId(this.roomId);
-        this.isSwarmKey = false;
+        this.leaderId = deriveLeaderId(this.roomId);
+        this.isLeaderKey = false;
         
         this.lamportClock = new AtomicLong(0);
         
         this.knownPeers = new ConcurrentHashMap<>();
-        this.swarmPeers = ConcurrentHashMap.newKeySet();
+        this.leaderPeers = ConcurrentHashMap.newKeySet();
         this.keyNodePeers = ConcurrentHashMap.newKeySet();
         this.receivedFileIds = ConcurrentHashMap.newKeySet();
         this.messageHistory = new ConcurrentHashMap<>();
@@ -98,9 +98,9 @@ public class ChatNode {
         this.fragmentAssembler = new FragmentAssembler();
         this.running = false;
         
-        // Initialize join time and swarm manager
+        // Initialize join time and leader manager
         this.joinTime = System.currentTimeMillis();
-        this.swarmManager = new SwarmManager(this);
+        this.leaderManager = new LeaderGroupManager(this);
         
         // Don't create UDP handler in constructor - do it in start() instead
         // This prevents port binding issues when constructor fails
@@ -114,7 +114,7 @@ public class ChatNode {
             new DiscoveryHandler.DiscoveryListener() {
                 @Override
                 public int getCurrentMemberCount() {
-                    return getSwarmMemberCount();
+                    return getLeaderMemberCount();
                 }
                 
                 @Override
@@ -164,19 +164,19 @@ public class ChatNode {
     public int getPort() { return port; }
     public UUID getRoomId() { return roomId; }
     public String getRoomName() { return roomName; }
-    public int getSwarmId() { return swarmId; }
-    public boolean isSwarmKey() { return isSwarmKey; }
+    public int getLeaderId() { return leaderId; }
+    public boolean isLeaderKey() { return isLeaderKey; }
     
     // Setters
-    public void setSwarmId(int swarmId) { 
-        this.swarmId = swarmId; 
+    public void setLeaderId(int leaderId) { 
+        this.leaderId = leaderId; 
         syncSelfPeerInfo();
     }
-    public void setSwarmKey(boolean isSwarmKey) { 
-        this.isSwarmKey = isSwarmKey; 
+    public void setLeaderKey(boolean isLeaderKey) { 
+        this.isLeaderKey = isLeaderKey; 
         syncSelfPeerInfo();
-        setDiscoveryBroadcastEnabled(isSwarmKey);
-        if (isSwarmKey) {
+        setDiscoveryBroadcastEnabled(isLeaderKey);
+        if (isLeaderKey) {
             triggerDiscoveryBroadcast();
         }
     }
@@ -194,40 +194,40 @@ public class ChatNode {
             return;
         }
         
-        // If we're a key node and peer is from different swarm, they might be trying to join us
-        // Update their swarm ID to match ours so they become part of our swarm
-        boolean peerJoiningOurSwarm = isSwarmKey && peer.getSwarmId() != this.swarmId && !peer.isSwarmKey();
-        if (peerJoiningOurSwarm) {
-            peer.setSwarmId(this.swarmId);
-            System.out.println("Peer " + peer.getNickname() + " joining our swarm (updated their swarm ID)");
+        // If we're a key node and peer is from different leader, they might be trying to join us
+        // Update their leader ID to match ours so they become part of our leader
+        boolean peerJoiningOurLeader = isLeaderKey && peer.getLeaderId() != this.leaderId && !peer.isLeaderKey();
+        if (peerJoiningOurLeader) {
+            peer.setLeaderId(this.leaderId);
+            System.out.println("Peer " + peer.getNickname() + " joining our leader (updated their leader ID)");
         }
         
-        adoptSwarmFromPeer(peer);
+        adoptLeaderFromPeer(peer);
 
-        boolean sameSwarm = peer.getSwarmId() == this.swarmId;
-        boolean isForeignKey = peer.isSwarmKey() && !sameSwarm;
-        if (!sameSwarm && !isForeignKey) {
-            return; // Do not keep arbitrary members from other swarms
+        boolean sameLeader = peer.getLeaderId() == this.leaderId;
+        boolean isForeignKey = peer.isLeaderKey() && !sameLeader;
+        if (!sameLeader && !isForeignKey) {
+            return; // Do not keep arbitrary members from other leaders
         }
 
         knownPeers.put(peer.getNodeId(), peer);
-        if (sameSwarm) {
-            swarmPeers.add(peer.getNodeId());
-            swarmManager.addSwarmMember(peer);
+        if (sameLeader) {
+            leaderPeers.add(peer.getNodeId());
+            leaderManager.addLeaderMember(peer);
         } else if (isForeignKey) {
             keyNodePeers.add(peer.getNodeId());
-            swarmManager.addKeyNode(peer);
+            leaderManager.addKeyNode(peer);
         }
     }
     
     public void removePeer(UUID peerId) {
         PeerInfo peer = knownPeers.get(peerId);
-        if (peer != null && peer.getSwarmId() == this.swarmId) {
-            swarmManager.removeSwarmMember(peerId);
+        if (peer != null && peer.getLeaderId() == this.leaderId) {
+            leaderManager.removeLeaderMember(peerId);
         }
         
         knownPeers.remove(peerId);
-        swarmPeers.remove(peerId);
+        leaderPeers.remove(peerId);
         keyNodePeers.remove(peerId);
     }
     
@@ -239,15 +239,15 @@ public class ChatNode {
         return knownPeers.values();
     }
     
-    public Collection<PeerInfo> getSwarmPeers() {
-        return swarmPeers.stream()
+    public Collection<PeerInfo> getLeaderPeers() {
+        return leaderPeers.stream()
                 .map(knownPeers::get)
                 .filter(Objects::nonNull)
                 .toList();
     }
 
-    public int getSwarmMemberCount() {
-        return swarmPeers.size() + 1; // include self
+    public int getLeaderMemberCount() {
+        return leaderPeers.size() + 1; // include self
     }
     
     public Collection<PeerInfo> getKeyNodePeers() {
@@ -296,16 +296,16 @@ public class ChatNode {
             transfer
         );
 
-        broadcastToSwarm(packet);
+        broadcastToLeader(packet);
         broadcastToKeyNodes(packet);
-        System.out.println("Broadcasting file '" + fileName + "' to swarm peers...");
+        System.out.println("Broadcasting file '" + fileName + "' to leader peers...");
         return true;
     }
 
     public boolean rebuildChatHistory() {
-        boolean hasSwarmPeers = !swarmPeers.isEmpty();
+        boolean hasLeaderPeers = !leaderPeers.isEmpty();
         boolean hasKeyPeers = !keyNodePeers.isEmpty();
-        if (!hasSwarmPeers && !hasKeyPeers) {
+        if (!hasLeaderPeers && !hasKeyPeers) {
             System.out.println("No peers available to rebuild chat history.");
             return false;
         }
@@ -316,7 +316,6 @@ public class ChatNode {
         }
 
         beginHistorySync("manual resync request");
-        messageHistory.clear();
         System.out.println("Requesting chat history sync from peers...");
 
         NetworkPacket syncRequest = new NetworkPacket(
@@ -327,7 +326,7 @@ public class ChatNode {
             null
         );
 
-        broadcastToSwarm(syncRequest);
+        broadcastToLeader(syncRequest);
         broadcastToKeyNodes(syncRequest);
         requestKeyStatusFromPeers();
         return true;
@@ -341,7 +340,7 @@ public class ChatNode {
             incrementClock(),
             null
         );
-        broadcastToSwarm(request);
+        broadcastToLeader(request);
         broadcastToKeyNodes(request);
     }
     
@@ -351,15 +350,15 @@ public class ChatNode {
     
     @Override
     public String toString() {
-        String keyStatus = isSwarmKey ? " [KEY NODE]" : "";
+        String keyStatus = isLeaderKey ? " [KEY NODE]" : "";
         return "Node: " + nickname + " (" + nodeId.toString().substring(0, 8) + "...) "
-               + "@ " + ipAddress + ":" + port + " [Swarm " + swarmId + "]" + keyStatus;
+               + "@ " + ipAddress + ":" + port + " [Leader " + leaderId + "]" + keyStatus;
     }
 
     private void refreshJoinMetadata() {
         this.joinTime = System.currentTimeMillis();
-        if (swarmManager != null) {
-            swarmManager.resetJoinTime(this.joinTime);
+        if (leaderManager != null) {
+            leaderManager.resetJoinTime(this.joinTime);
         }
         syncSelfPeerInfo();
     }
@@ -370,26 +369,26 @@ public class ChatNode {
             knownPeers.put(nodeId, createOwnPeerInfo());
             return;
         }
-        self.setSwarmKey(isSwarmKey);
-        self.setSwarmId(swarmId);
+        self.setLeaderKey(isLeaderKey);
+        self.setLeaderId(leaderId);
         self.setJoinTime(joinTime);
     }
 
-    private void adoptSwarmFromPeer(PeerInfo peer) {
-        if (isSwarmKey) {
+    private void adoptLeaderFromPeer(PeerInfo peer) {
+        if (isLeaderKey) {
             return;
         }
-        if (!peer.isSwarmKey()) {
+        if (!peer.isLeaderKey()) {
             return;
         }
-        if (!swarmPeers.isEmpty()) {
+        if (!leaderPeers.isEmpty()) {
             return;
         }
-        if (this.swarmId == peer.getSwarmId()) {
+        if (this.leaderId == peer.getLeaderId()) {
             return;
         }
-        System.out.println("Adopting swarm ID " + peer.getSwarmId() + " from key node " + peer.getNickname());
-        setSwarmId(peer.getSwarmId());
+        System.out.println("Adopting leader ID " + peer.getLeaderId() + " from key node " + peer.getNickname());
+        setLeaderId(peer.getLeaderId());
     }
 
     private Path initLogPath() {
@@ -416,7 +415,7 @@ public class ChatNode {
         String line = String.format(
             "%s [%s] %s: %s%n",
             java.time.LocalDateTime.now().format(logTimestampFormatter),
-            swarmId,
+            leaderId,
             message.getSenderNickname(),
             message.getContent()
         );
@@ -427,7 +426,61 @@ public class ChatNode {
         }
     }
 
-    private int deriveSwarmId(UUID sourceId) {
+    public boolean loadHistoryFromLocalLog() {
+        if (logFilePath == null) {
+            System.out.println("No local log file available to rebuild history.");
+            return false;
+        }
+        if (!Files.exists(logFilePath)) {
+            System.out.println("Log file not found: " + logFilePath.toAbsolutePath());
+            return false;
+        }
+        try {
+            java.util.List<String> lines = Files.readAllLines(logFilePath, StandardCharsets.UTF_8);
+            if (lines.isEmpty()) {
+                System.out.println("Log file is empty. Nothing to reload.");
+                return false;
+            }
+            messageHistory.clear();
+            long syntheticLamport = 0L;
+            for (String line : lines) {
+                if (line == null || line.isBlank()) {
+                    continue;
+                }
+                ChatMessage reconstructed = parseLogLine(line, ++syntheticLamport);
+                if (reconstructed != null) {
+                    messageHistory.put(reconstructed.getMessageId(), reconstructed);
+                }
+            }
+            lamportClock.set(Math.max(lamportClock.get(), syntheticLamport));
+            System.out.println("Reloaded " + messageHistory.size() + " messages from local log.");
+            return !messageHistory.isEmpty();
+        } catch (IOException ioe) {
+            System.err.println("Failed to read log file: " + ioe.getMessage());
+            return false;
+        }
+    }
+
+    private ChatMessage parseLogLine(String line, long lamportTimestamp) {
+        int firstBracket = line.indexOf('[');
+        int closingBracket = line.indexOf(']', firstBracket + 1);
+        if (firstBracket < 0 || closingBracket < 0 || closingBracket + 2 >= line.length()) {
+            return null;
+        }
+        int colonIndex = line.indexOf(':', closingBracket + 2);
+        if (colonIndex < 0) {
+            return null;
+        }
+        String senderNickname = line.substring(closingBracket + 2, colonIndex).trim();
+        String content = line.substring(colonIndex + 1).trim();
+        if (senderNickname.isEmpty() || content.isEmpty()) {
+            return null;
+        }
+        UUID derivedSenderId = UUID.nameUUIDFromBytes(("log:" + senderNickname).getBytes(StandardCharsets.UTF_8));
+        return new ChatMessage(derivedSenderId, senderNickname, content, lamportTimestamp);
+    }
+
+    private int deriveLeaderId(UUID sourceId) {
         int hash = sourceId.hashCode();
         return Math.floorMod(hash, 100_000) + 1; // keep ids positive and within a readable range
     }
@@ -471,7 +524,7 @@ public class ChatNode {
             new Thread(() -> {
                 try {
                     Thread.sleep(2000); // Wait for join to complete
-                    swarmManager.requestKeyNodes();
+                    leaderManager.requestKeyNodes();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
@@ -510,8 +563,8 @@ public class ChatNode {
             incrementClock(),
             null
         );
-        broadcastToSwarm(heartbeat);
-        if (isSwarmKey) {
+        broadcastToLeader(heartbeat);
+        if (isLeaderKey) {
             broadcastToKeyNodes(heartbeat);
         }
     }
@@ -560,7 +613,7 @@ public class ChatNode {
         if (discoveryHandler != null) {
             discoveryHandler.stop();
         }
-        leaveCurrentSwarm(false);
+        leaveCurrentLeader(false);
         
         System.out.println("Node stopped: " + nickname);
     }
@@ -579,8 +632,8 @@ public class ChatNode {
      * Join a network by connecting to a known peer
      */
     public void joinNetwork(String peerAddress, int peerPort) {
-        if (isSwarmKey || !swarmPeers.isEmpty() || knownPeers.size() > 1) {
-            System.out.println("Leaving current swarm before joining a new one...");
+        if (isLeaderKey || !leaderPeers.isEmpty() || knownPeers.size() > 1) {
+            System.out.println("Leaving current leader before joining a new one...");
             prepareForJoin();
         }
         System.out.println("Joining network via " + peerAddress + ":" + peerPort);
@@ -617,7 +670,7 @@ public class ChatNode {
         UUID messageId = message.getMessageId();
         
         // Track as pending if we have peers to send to
-        int peerCount = swarmPeers.size() + (isSwarmKey ? keyNodePeers.size() : 0);
+        int peerCount = leaderPeers.size() + (isLeaderKey ? keyNodePeers.size() : 0);
         if (peerCount > 0) {
             pendingMessages.add(messageId);
         } else {
@@ -637,11 +690,11 @@ public class ChatNode {
             message
         );
         
-        // Broadcast to swarm peers
-        broadcastToSwarm(packet);
+        // Broadcast to leader peers
+        broadcastToLeader(packet);
         
         // If we're a key node, also send to other key nodes
-        if (isSwarmKey) {
+        if (isLeaderKey) {
             broadcastToKeyNodes(packet);
         }
         
@@ -781,11 +834,11 @@ public class ChatNode {
             return;
         }
 
-        // Forward to swarm peers (except sender)
-        forwardToSwarm(packet, packet.getSenderId());
+        // Forward to leader peers (except sender)
+        forwardToLeader(packet, packet.getSenderId());
 
         // If we're a key node, forward to other key nodes
-        if (isSwarmKey) {
+        if (isLeaderKey) {
             forwardToKeyNodes(packet, packet.getSenderId());
         }
     }
@@ -818,16 +871,16 @@ public class ChatNode {
         // Send them all chat history
         sendChatHistoryTo(senderAddress, senderPort);
         // Share key status only if we are currently the key node
-        if (isSwarmKey) {
-            swarmManager.broadcastKeyNodeStatus();
+        if (isLeaderKey) {
+            leaderManager.broadcastKeyNodeStatus();
         }
         
         // Notify other peers about the new peer
         broadcastPeerDiscovery(newPeer);
         
         // If we're key node, share key node list with new member
-        if (isSwarmKey) {
-            swarmManager.shareKeyNodes();
+        if (isLeaderKey) {
+            leaderManager.shareKeyNodes();
         }
     }
     
@@ -872,8 +925,8 @@ public class ChatNode {
         }
 
         PeerInfo requester = getPeer(packet.getSenderId());
-        if (requester != null && requester.getSwarmId() != this.swarmId) {
-            System.out.println("Ignoring history request from different swarm node " + requester.getNickname());
+        if (requester != null && requester.getLeaderId() != this.leaderId) {
+            System.out.println("Ignoring history request from different leader node " + requester.getNickname());
             return;
         }
 
@@ -882,8 +935,8 @@ public class ChatNode {
         sendChatHistoryTo(senderAddress, senderPort);
         
         // Only broadcast key status if WE are actually the key node
-        if (isSwarmKey) {
-            swarmManager.broadcastKeyNodeStatus();
+        if (isLeaderKey) {
+            leaderManager.broadcastKeyNodeStatus();
         }
     }
 
@@ -938,34 +991,34 @@ public class ChatNode {
     // ===== HELPER METHODS =====
     
     private PeerInfo createOwnPeerInfo() {
-        PeerInfo own = new PeerInfo(nodeId, nickname, ipAddress, port, swarmId);
-        own.setSwarmKey(isSwarmKey);
+        PeerInfo own = new PeerInfo(nodeId, nickname, ipAddress, port, leaderId);
+        own.setLeaderKey(isLeaderKey);
         own.setJoinTime(joinTime);
         return own;
     }
     
-    public void broadcastToSwarm(NetworkPacket packet) {
-        udpHandler.broadcast(packet, getSwarmPeers());
+    public void broadcastToLeader(NetworkPacket packet) {
+        udpHandler.broadcast(packet, getLeaderPeers());
     }
     
-    public void updateSwarmKeyFlags(UUID keyNodeId) {
+    public void updateLeaderKeyFlags(UUID keyNodeId) {
         for (PeerInfo peer : knownPeers.values()) {
-            if (peer.getSwarmId() == this.swarmId) {
-                peer.setSwarmKey(peer.getNodeId().equals(keyNodeId));
+            if (peer.getLeaderId() == this.leaderId) {
+                peer.setLeaderKey(peer.getNodeId().equals(keyNodeId));
             }
         }
         syncSelfPeerInfo();
     }
 
     public void ensureSeedKey() {
-        swarmManager.ensureKeyNode();
+        leaderManager.ensureKeyNode();
     }
 
     public void prepareForJoin() {
-        leaveCurrentSwarm(!swarmPeers.isEmpty());
-        setSwarmKey(false);
+        leaveCurrentLeader(!leaderPeers.isEmpty());
+        setLeaderKey(false);
         setDiscoveryBroadcastEnabled(false);
-        // Reset join time so we don't steal key status from existing swarm members
+        // Reset join time so we don't steal key status from existing leader members
         refreshJoinMetadata();
     }
 
@@ -1003,8 +1056,8 @@ public class ChatNode {
         udpHandler.broadcast(packet, getKeyNodePeers());
     }
     
-    private void forwardToSwarm(NetworkPacket packet, UUID excludeNodeId) {
-        for (PeerInfo peer : getSwarmPeers()) {
+    private void forwardToLeader(NetworkPacket packet, UUID excludeNodeId) {
+        for (PeerInfo peer : getLeaderPeers()) {
             if (!peer.getNodeId().equals(excludeNodeId)) {
                 try {
                     udpHandler.sendWithFragmentation(packet, peer.getIpAddress(), peer.getPort());
@@ -1027,14 +1080,14 @@ public class ChatNode {
         }
     }
 
-    private void leaveCurrentSwarm(boolean notifyPeers) {
+    private void leaveCurrentLeader(boolean notifyPeers) {
         if (notifyPeers && running) {
             sendLeaveNotification();
         }
         knownPeers.clear();
-        swarmPeers.clear();
+        leaderPeers.clear();
         keyNodePeers.clear();
-        swarmManager.resetMembership();
+        leaderManager.resetMembership();
         historySyncInProgress = false;
         outboundMutedForSync = false;
         deferredPackets.clear();
@@ -1094,7 +1147,7 @@ public class ChatNode {
             newPeer
         );
         
-        broadcastToSwarm(packet);
+        broadcastToLeader(packet);
     }
     
     private void sendLeaveNotification() {
@@ -1106,8 +1159,8 @@ public class ChatNode {
             null
         );
         
-        broadcastToSwarm(packet);
-        if (isSwarmKey) {
+        broadcastToLeader(packet);
+        if (isLeaderKey) {
             broadcastToKeyNodes(packet);
         }
     }
@@ -1229,7 +1282,7 @@ public class ChatNode {
         if (keyNode == null) {
             return;
         }
-        if (!keyNode.isSwarmKey()) {
+        if (!keyNode.isLeaderKey()) {
             System.out.println("Ignoring key announce from " + packet.getSenderNickname() + " (not flagged as key)");
             return;
         }
@@ -1243,10 +1296,10 @@ public class ChatNode {
         // Add/update the peer info
         addPeer(keyNode);
         
-        // Only consider key status changes within our swarm
-        if (keyNode.getSwarmId() == this.swarmId) {
-            if (isSwarmKey) {
-                long ourJoinTime = swarmManager.getJoinTime();
+        // Only consider key status changes within our leader
+        if (keyNode.getLeaderId() == this.leaderId) {
+            if (isLeaderKey) {
+                long ourJoinTime = leaderManager.getJoinTime();
                 long theirJoinTime = keyNode.getJoinTime();
                 int idComparison = keyNode.getNodeId().compareTo(nodeId);
                 boolean theyHavePriority = theirJoinTime < ourJoinTime
@@ -1255,15 +1308,15 @@ public class ChatNode {
 
                 if (theyHavePriority) {
                     System.out.println(">>> Deferring key node status to " + keyNode.getNickname());
-                    setSwarmKey(false);
-                    updateSwarmKeyFlags(keyNode.getNodeId());
+                    setLeaderKey(false);
+                    updateLeaderKeyFlags(keyNode.getNodeId());
                 } else if (!keyNode.getNodeId().equals(nodeId)) {
-                    // We still hold the key - re-announce to keep swarm consistent
+                    // We still hold the key - re-announce to keep leader consistent
                     System.out.println(">>> Ignoring key claim from " + keyNode.getNickname() + " (we retain priority)");
-                    swarmManager.broadcastKeyNodeStatus();
+                    leaderManager.broadcastKeyNodeStatus();
                 }
             } else {
-                updateSwarmKeyFlags(keyNode.getNodeId());
+                updateLeaderKeyFlags(keyNode.getNodeId());
             }
         }
     }
@@ -1271,21 +1324,21 @@ public class ChatNode {
     private void handleKeyNodeList(NetworkPacket packet) {
         @SuppressWarnings("unchecked")
         java.util.List<PeerInfo> keyNodes = (java.util.List<PeerInfo>) packet.getPayload();
-        System.out.println("Received " + keyNodes.size() + " key nodes from other swarms");
+        System.out.println("Received " + keyNodes.size() + " key nodes from other leaders");
         
         for (PeerInfo keyNode : keyNodes) {
-            swarmManager.addKeyNode(keyNode);
+            leaderManager.addKeyNode(keyNode);
         }
     }
     
     private void handleKeyNodeRequest(NetworkPacket packet) {
         // Only key nodes respond to this
-        if (!isSwarmKey) {
+        if (!isLeaderKey) {
             return;
         }
         
         System.out.println(packet.getSenderNickname() + " requested key node list");
-        swarmManager.shareKeyNodes();
-        swarmManager.broadcastKeyNodeStatus();
+        leaderManager.shareKeyNodes();
+        leaderManager.broadcastKeyNodeStatus();
     }
 }
