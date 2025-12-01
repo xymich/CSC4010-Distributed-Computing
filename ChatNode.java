@@ -751,6 +751,15 @@ public class ChatNode {
      */
     private void handleIncomingPacket(NetworkPacket packet, String senderAddress, int senderPort) {
         try {
+            // Debug: log incoming packet type
+            if (packet.isFragmented()) {
+                System.out.println("[RECV-DEBUG] Fragment received from " + senderAddress + ":" + senderPort + 
+                    " - index " + packet.getFragmentIndex() + "/" + packet.getTotalFragments() +
+                    " group " + packet.getFragmentGroupId().toString().substring(0, 8));
+            } else if (packet.getType() == MessageType.FILE_TRANSFER) {
+                System.out.println("[RECV-DEBUG] Non-fragmented FILE_TRANSFER from " + senderAddress + ":" + senderPort);
+            }
+            
             // Handle fragmented packets
             NetworkPacket completePacket = fragmentAssembler.addFragment(packet);
             if (completePacket == null) {

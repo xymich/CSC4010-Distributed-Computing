@@ -172,6 +172,9 @@ public class UDPHandler {
                 }
                 
                 // Handle packet in thread pool
+                if (data.length > 1000) {
+                    System.out.println("[UDP-DEBUG] Received large packet (" + data.length + " bytes) from " + senderAddress + ":" + senderPort);
+                }
                 executorService.submit(() -> handleReceivedPacket(data, senderAddress, senderPort));
                 
             } catch (SocketException e) {
