@@ -6,8 +6,8 @@ import java.util.UUID;
 public class PacketSerialiser {
     
     // Maximum safe UDP packet size (leaving room for headers)
-    public static final int MAX_PACKET_SIZE = 8192; // 8KB
-    private static final int HEADER_OVERHEAD = 512; // Estimate for serialization overhead
+    public static final int MAX_PACKET_SIZE = 1400; // Stay safely below common MTU sizes
+    private static final int HEADER_OVERHEAD = 200; // Estimate for serialization overhead
     public static final int MAX_PAYLOAD_SIZE = MAX_PACKET_SIZE - HEADER_OVERHEAD;
     
     /**

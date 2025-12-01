@@ -560,6 +560,7 @@ public class ChatNode {
         if (discoveryHandler != null) {
             discoveryHandler.stop();
         }
+        leaveCurrentSwarm(false);
         
         System.out.println("Node stopped: " + nickname);
     }
@@ -578,6 +579,10 @@ public class ChatNode {
      * Join a network by connecting to a known peer
      */
     public void joinNetwork(String peerAddress, int peerPort) {
+        if (isSwarmKey || !swarmPeers.isEmpty() || knownPeers.size() > 1) {
+            System.out.println("Leaving current swarm before joining a new one...");
+            prepareForJoin();
+        }
         System.out.println("Joining network via " + peerAddress + ":" + peerPort);
         beginHistorySync("joining network");
         
@@ -812,8 +817,10 @@ public class ChatNode {
         
         // Send them all chat history
         sendChatHistoryTo(senderAddress, senderPort);
-        // Share key status along with history to ensure metadata is consistent
-        swarmManager.broadcastKeyNodeStatus();
+        // Share key status only if we are currently the key node
+        if (isSwarmKey) {
+            swarmManager.broadcastKeyNodeStatus();
+        }
         
         // Notify other peers about the new peer
         broadcastPeerDiscovery(newPeer);
@@ -1219,6 +1226,13 @@ public class ChatNode {
     
     private void handleKeyNodeAnnounce(NetworkPacket packet) {
         PeerInfo keyNode = (PeerInfo) packet.getPayload();
+        if (keyNode == null) {
+            return;
+        }
+        if (!keyNode.isSwarmKey()) {
+            System.out.println("Ignoring key announce from " + packet.getSenderNickname() + " (not flagged as key)");
+            return;
+        }
         System.out.println("Key node announced: " + keyNode.getNickname());
         
         if (keyNode.getNodeId().equals(nodeId)) {
@@ -1231,23 +1245,24 @@ public class ChatNode {
         
         // Only consider key status changes within our swarm
         if (keyNode.getSwarmId() == this.swarmId) {
-            // If we're already the key node, only defer to someone who joined BEFORE us
             if (isSwarmKey) {
                 long ourJoinTime = swarmManager.getJoinTime();
                 long theirJoinTime = keyNode.getJoinTime();
-                
-                // Only give up key if they joined before us (they have seniority)
-                if (theirJoinTime < ourJoinTime) {
-                    System.out.println(">>> Deferring key node status to " + keyNode.getNickname() + " (joined earlier)");
+                int idComparison = keyNode.getNodeId().compareTo(nodeId);
+                boolean theyHavePriority = theirJoinTime < ourJoinTime
+                        || (theirJoinTime == ourJoinTime && idComparison < 0)
+                        || idComparison < 0;
+
+                if (theyHavePriority) {
+                    System.out.println(">>> Deferring key node status to " + keyNode.getNickname());
                     setSwarmKey(false);
                     updateSwarmKeyFlags(keyNode.getNodeId());
-                } else {
-                    // We have seniority - re-announce ourselves as key
-                    System.out.println(">>> Ignoring key claim from " + keyNode.getNickname() + " (we joined earlier)");
+                } else if (!keyNode.getNodeId().equals(nodeId)) {
+                    // We still hold the key - re-announce to keep swarm consistent
+                    System.out.println(">>> Ignoring key claim from " + keyNode.getNickname() + " (we retain priority)");
                     swarmManager.broadcastKeyNodeStatus();
                 }
             } else {
-                // We're not the key - just update who the key is
                 updateSwarmKeyFlags(keyNode.getNodeId());
             }
         }
