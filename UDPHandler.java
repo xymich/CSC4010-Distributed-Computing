@@ -74,6 +74,17 @@ public class UDPHandler {
     public void send(NetworkPacket packet, String address, int port) throws IOException {
         byte[] data = PacketSerialiser.serialize(packet);
         
+        // Log actual packet sizes for debugging
+        if (packet.isFragmented() || packet.getType() == MessageType.FILE_TRANSFER) {
+            System.out.println("[SIZE-DEBUG] Sending packet: " + data.length + " bytes (type: " + 
+                (packet.isFragmented() ? "FRAGMENT" : packet.getType()) + ") to " + address + ":" + port);
+        }
+        
+        // Warn if packet is suspiciously large
+        if (data.length > 1400) {
+            System.out.println("[SIZE-DEBUG] WARNING: Packet size " + data.length + " exceeds safe UDP threshold!");
+        }
+        
         // Only check size for non-fragmented packets
         // Fragmented packets are already split and should be sent as-is
         if (!packet.isFragmented() && data.length > PacketSerialiser.MAX_PACKET_SIZE) {
