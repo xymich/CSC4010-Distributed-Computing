@@ -1,4 +1,4 @@
-# P2P Distributed Chat System
+# Slykord (Slack, Skype & Discord) - a P2P Distributed Chat System
 
 Leader-elected, room-based peer-to-peer chat over UDP, with both CLI and Swing GUI front-ends. Nodes discover rooms and peers via UDP broadcast, elect a key node per room, and exchange messages, history, and files without any central server.
 
