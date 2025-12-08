@@ -119,5 +119,3 @@ Some features (like changing identity) are exposed in the GUI (`Logout` button) 
   - Local logs allow reconstructing the chat view even without peers.
 - **File transfer**:
   - `FileTransfer` payloads are sent as fragmented UDP packets and reassembled by `FragmentAssembler`.
-
-This README reflects the current leader‑based architecture, the latest commands, and removes any older “swarm” or obsolete behaviour that no longer exists in the code.

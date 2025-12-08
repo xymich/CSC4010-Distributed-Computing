@@ -44,7 +44,7 @@ ADVANCED REQUIREMENTS:
 [✓] Transfer binary files (/sendfile - P2P via UDP)
 [✓] Clear local copy and rebuild from network (/resync clears and rebuilds)
 [✓] Re-draw chat data from local data in order (/messages command)
-[✓] External interface (GUI - Swing-based graphical interface separate from CLI)
+[✓] External interface (HTTP API - BroadcastService exposes REST endpoints for external tools)
 
 ADDITIONAL MARKS:
 [✓] Design quality - leader-based architecture with key nodes
